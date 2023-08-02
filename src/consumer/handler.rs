@@ -46,7 +46,7 @@ macro_rules! impl_async_message_handler {
         #[allow(non_snake_case)]
         impl<Fun, Fut, M, $($extract,)*> Handler for AsyncFnMessageHandler<Fun, (Fut, $($extract,)*), M>
         where
-            M: Message + Send + Sync + 'static,
+            M: Message,
             Fun: Fn(M, $($extract,)*) -> Fut + Send + Sync + 'static,
             Fut: Future + Send + Sync + 'static,
             Fut::Output: Into<Confirmation>,

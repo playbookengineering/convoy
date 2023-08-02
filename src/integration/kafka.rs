@@ -1,16 +1,21 @@
 use std::{
+    fmt::Display,
     mem::{self, ManuallyDrop},
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use rdkafka::{
     consumer::{CommitMode, Consumer, ConsumerContext, StreamConsumer},
-    message::{BorrowedMessage, Headers, Message as _Message},
+    message::{BorrowedMessage, Headers, Message as _Message, OwnedHeaders},
+    producer::{FutureProducer, FutureRecord},
+    ClientContext,
 };
 
 use crate::{
     message_bus::{IncomingMessage, MessageBus},
+    producer::Producer,
     RawHeaders,
 };
 
@@ -68,6 +73,17 @@ where
     consumer: Arc<StreamConsumer<C>>,
 }
 
+impl<C> KafkaConsumer<C>
+where
+    C: ConsumerContext + 'static,
+{
+    pub fn new(consumer: StreamConsumer<C>) -> Self {
+        Self {
+            consumer: Arc::new(consumer),
+        }
+    }
+}
+
 #[async_trait]
 impl<C: ConsumerContext + 'static> MessageBus for KafkaConsumer<C> {
     type IncomingMessage = RdKafkaOwnedMessage<C>;
@@ -120,5 +136,90 @@ impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
 
     fn key(&self) -> Option<&str> {
         self.message.key().and_then(|x| std::str::from_utf8(x).ok())
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct KafkaProducerOptions {
+    topic_override: Option<String>,
+    additional_headers: RawHeaders,
+}
+
+impl KafkaProducerOptions {
+    pub fn override_topic(self, topic: String) -> Self {
+        Self {
+            topic_override: Some(topic),
+            ..self
+        }
+    }
+
+    pub fn add_header(mut self, key: impl Display, value: impl Display) -> Self {
+        let key = key.to_string();
+        let value = value.to_string();
+
+        self.additional_headers.insert(key, value);
+
+        self
+    }
+}
+
+#[derive(Clone)]
+pub struct KafkaProducer<C: ClientContext + 'static> {
+    producer: Arc<FutureProducer<C>>,
+    topic: String,
+}
+
+impl<C: ClientContext + 'static> KafkaProducer<C> {
+    pub fn new(producer: FutureProducer<C>, topic: String) -> Self {
+        Self {
+            producer: Arc::new(producer),
+            topic,
+        }
+    }
+}
+
+#[async_trait]
+impl<C: ClientContext + 'static> Producer for KafkaProducer<C> {
+    type Options = KafkaProducerOptions;
+
+    type Error = rdkafka::error::KafkaError;
+
+    async fn send(
+        &self,
+        key: String,
+        mut headers: RawHeaders,
+        payload: Vec<u8>,
+        options: Self::Options,
+    ) -> Result<(), Self::Error> {
+        let KafkaProducerOptions {
+            topic_override,
+            additional_headers,
+        } = options;
+
+        headers.extend(additional_headers);
+
+        let topic = topic_override.as_deref().unwrap_or(self.topic.as_str());
+
+        let headers_len = headers.len();
+        let headers = headers.into_iter().fold(
+            OwnedHeaders::new_with_capacity(headers_len),
+            |headers, (key, value)| {
+                headers.insert(rdkafka::message::Header {
+                    key: &key,
+                    value: Some(&value),
+                })
+            },
+        );
+
+        let record = FutureRecord::to(topic)
+            .key(&key)
+            .payload(&payload)
+            .headers(headers);
+
+        self.producer
+            .send(record, Duration::from_secs(10))
+            .await
+            .map(|_| ())
+            .map_err(|err| err.0)
     }
 }

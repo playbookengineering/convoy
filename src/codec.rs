@@ -7,6 +7,8 @@ pub trait Codec: Debug {
     type EncodeError: Error + Send + Sync + 'static;
     type DecodeError: Error + Send + Sync + 'static;
 
+    const CONTENT_TYPE: &'static str;
+
     fn encode<S: Serialize>(&self, ser: S) -> Result<Vec<u8>, Self::EncodeError>;
 
     fn decode<'a, T>(&self, data: &'a [u8]) -> Result<T, Self::DecodeError>
@@ -20,6 +22,8 @@ pub struct Json;
 impl Codec for Json {
     type EncodeError = serde_json::Error;
     type DecodeError = serde_json::Error;
+
+    const CONTENT_TYPE: &'static str = "json";
 
     fn encode<S: Serialize>(&self, ser: S) -> Result<Vec<u8>, Self::EncodeError> {
         let bytes = serde_json::to_vec(&ser)?;

@@ -1,9 +1,9 @@
 pub(crate) mod codec;
-pub(crate) mod kafka;
 pub(crate) mod message;
 pub(crate) mod message_bus;
 
 pub mod consumer;
+pub mod integration;
 pub mod producer;
 
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub(crate) mod test {
     use crate::{message_bus::IncomingMessage, Message, MessageBus, RawHeaders};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct TestMessage(TestMessageBody, Meta);
+    pub struct TestMessage(pub TestMessageBody, pub Meta);
 
     impl TestMessage {
         pub fn new(num: usize) -> Self {
