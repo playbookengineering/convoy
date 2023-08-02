@@ -61,7 +61,7 @@ impl Router {
         self
     }
 
-    pub async fn route(&self, ctx: ProcessContext<'_>) -> Result<Confirmation, HandlerError> {
+    pub async fn route(&self, ctx: &ProcessContext<'_>) -> Result<Confirmation, HandlerError> {
         let handler = ctx
             .kind()
             .and_then(|kind| self.handlers.get(kind))

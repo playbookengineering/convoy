@@ -8,7 +8,7 @@ pub mod producer;
 
 use std::collections::HashMap;
 
-pub use consumer::MessageConsumerBuilder;
+pub use consumer::MessageConsumer;
 pub use message::{Message, RawMessage};
 pub use message_bus::MessageBus;
 
@@ -20,7 +20,11 @@ pub(crate) mod test {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{message_bus::IncomingMessage, Message, MessageBus, RawHeaders};
+    use crate::{
+        message::{CONTENT_TYPE_HEADER, KIND_HEADER},
+        message_bus::IncomingMessage,
+        Message, MessageBus, RawHeaders,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct TestMessage(pub TestMessageBody, pub Meta);
@@ -97,8 +101,11 @@ pub(crate) mod test {
             let key = Some(message.key().to_owned());
 
             let mut headers = RawHeaders::default();
-            headers.insert("kind".to_owned(), TestMessage::KIND.to_owned());
-            headers.insert("content-type".to_owned(), "application/json".to_owned());
+            headers.insert(KIND_HEADER.to_owned(), TestMessage::KIND.to_owned());
+            headers.insert(
+                CONTENT_TYPE_HEADER.to_owned(),
+                "application/json".to_owned(),
+            );
 
             let payload = serde_json::to_vec(&message.0).unwrap();
 

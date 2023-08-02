@@ -54,7 +54,7 @@ impl<T: Debug + Clone + Send + Sync + 'static> TryExtract for Extension<T> {
 
     fn try_extract(message: &ProcessContext<'_>) -> Result<Self, Self::Error> {
         let extension = message
-            .extensions
+            .extensions()
             .get::<T>()
             .ok_or_else(|| ExtensionExtractError(std::any::type_name::<T>()))?;
 

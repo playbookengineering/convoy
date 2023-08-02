@@ -3,13 +3,17 @@ use rand::{rngs::ThreadRng, Rng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use crate::message_bus::{IncomingMessage, MessageBus};
+use crate::{
+    message_bus::{IncomingMessage, MessageBus},
+    MessageConsumer,
+};
 
 use super::{
-    context::ProcessContext,
+    context::{LocalCache, ProcessContext},
     extension::Extensions,
     router::Router,
     task_local::{TaskLocal, TASK_LOCALS},
+    Hooks,
 };
 
 pub struct WorkerPool<B: MessageBus> {
@@ -19,8 +23,7 @@ pub struct WorkerPool<B: MessageBus> {
 pub struct WorkerContext<B>(Arc<WorkerContextInternal<B>>);
 
 struct WorkerContextInternal<B> {
-    router: Router,
-    extensions: Arc<Extensions>,
+    consumer: MessageConsumer,
     bus: B,
 }
 
@@ -50,22 +53,22 @@ struct Fixed<B: MessageBus> {
     rng: ThreadRng,
 }
 impl<B: MessageBus> WorkerContext<B> {
-    pub fn new(router: Router, extensions: Extensions, bus: B) -> Self {
-        let internal = WorkerContextInternal {
-            router,
-            extensions: Arc::new(extensions),
-            bus,
-        };
+    pub fn new(consumer: MessageConsumer, bus: B) -> Self {
+        let internal = WorkerContextInternal { consumer, bus };
 
         Self(Arc::new(internal))
     }
 
     pub fn router(&self) -> &Router {
-        &self.0.router
+        &self.0.consumer.router
     }
 
     pub fn extensions(&self) -> &Extensions {
-        &self.0.extensions
+        &self.0.consumer.extensions
+    }
+
+    pub fn hooks(&self) -> &Hooks {
+        &self.0.consumer.hooks
     }
 
     pub fn bus(&self) -> &B {
@@ -215,13 +218,15 @@ async fn worker<B: MessageBus>(
         let payload = message.payload();
         let headers = message.headers();
 
-        let process_context = ProcessContext {
-            payload,
-            headers,
-            extensions,
-        };
+        let mut cache = LocalCache::default();
 
-        let confirmation = match router.route(process_context).await {
+        let mut process_context = ProcessContext::new(payload, headers, extensions, &mut cache);
+
+        worker_context
+            .hooks()
+            .on_processing_start(&mut process_context);
+
+        let confirmation = match router.route(&process_context).await {
             Ok(confirmation) => confirmation,
             Err(err) => {
                 tracing::error!("Handler error occurred: {err}");
@@ -238,6 +243,10 @@ async fn worker<B: MessageBus>(
         if let Err(err) = confirmation_store_result {
             tracing::error!("Failed to store confirmation result: {err}");
         }
+
+        worker_context
+            .hooks()
+            .on_processing_end(&process_context, confirmation);
     }
 }
 
@@ -259,6 +268,7 @@ impl WorkerId {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::consumer::{Confirmation, Hook};
     use crate::test::{TestIncomingMessage, TestMessage, TestMessageBus};
     use crate::{consumer::Extension, RawHeaders, RawMessage};
 
@@ -293,17 +303,19 @@ mod test {
 
     #[tokio::test]
     async fn fixed_pool_dispatch() {
-        let router = Router::default().message_handler(handler);
         let (tx, mut rx) = unbounded_channel::<(TestMessage, WorkerId, usize)>();
-        let extensions = Extensions::default().insert(tx);
+        let consumer = MessageConsumer::default()
+            .message_handler(handler)
+            .extension(tx);
 
-        let context = WorkerContext::new(router, extensions, TestMessageBus);
+        let context = WorkerContext::new(consumer, TestMessageBus);
 
         let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config(), context);
 
         let message = TestMessage::new(0);
 
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
+
         workers.dispatch(incoming);
         let (processed, worker_id, _) = rx.recv().await.unwrap();
 
@@ -331,11 +343,13 @@ mod test {
 
     #[tokio::test]
     async fn fixed_pool_fallback() {
-        let router = Router::default().fallback_handler(fallback_handler);
         let (tx, mut rx) = unbounded_channel::<(RawMessage, WorkerId)>();
-        let extensions = Extensions::default().insert(tx);
 
-        let context = WorkerContext::new(router, extensions, TestMessageBus);
+        let consumer = MessageConsumer::default()
+            .fallback_handler(fallback_handler)
+            .extension(tx);
+
+        let context = WorkerContext::new(consumer, TestMessageBus);
 
         let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config(), context);
 
@@ -354,12 +368,13 @@ mod test {
 
     #[tokio::test]
     async fn key_routed_pool_dispatch() {
-        let router = Router::default().message_handler(handler);
-
         let (tx, mut rx) = unbounded_channel::<(TestMessage, WorkerId, usize)>();
-        let extensions = Extensions::default().insert(tx);
 
-        let context = WorkerContext::new(router, extensions, TestMessageBus);
+        let consumer = MessageConsumer::default()
+            .message_handler(handler)
+            .extension(tx);
+
+        let context = WorkerContext::new(consumer, TestMessageBus);
 
         let mut workers = WorkerPool::<TestMessageBus>::key_routed(context);
 
@@ -398,11 +413,13 @@ mod test {
 
     #[tokio::test]
     async fn key_routed_pool_fallback() {
-        let router = Router::default().fallback_handler(fallback_handler);
         let (tx, mut rx) = unbounded_channel::<(RawMessage, WorkerId)>();
-        let extensions = Extensions::default().insert(tx);
 
-        let context = WorkerContext::new(router, extensions, TestMessageBus);
+        let consumer = MessageConsumer::default()
+            .fallback_handler(fallback_handler)
+            .extension(tx);
+
+        let context = WorkerContext::new(consumer, TestMessageBus);
 
         let mut workers = WorkerPool::<TestMessageBus>::key_routed(context);
 
@@ -418,5 +435,84 @@ mod test {
         assert_eq!(processed_raw.payload, [42]);
         assert_eq!(processed_raw.headers, RawHeaders::default());
         assert_eq!(worker_id.get(), "fallback");
+    }
+
+    #[tokio::test]
+    async fn hooks_are_executed() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Event {
+            ProcessStart,
+            ProcessEnd(Confirmation),
+        }
+
+        struct TestHook(UnboundedSender<Event>);
+
+        impl Hook for TestHook {
+            fn on_processing_start(&self, _: &mut ProcessContext<'_>) {
+                self.0.send(Event::ProcessStart).unwrap();
+            }
+
+            fn on_processing_end(&self, _: &ProcessContext<'_>, confirmation: Confirmation) {
+                self.0.send(Event::ProcessEnd(confirmation)).unwrap();
+            }
+        }
+
+        let (tx, mut rx) = unbounded_channel();
+
+        let consumer = MessageConsumer::default().hook(TestHook(tx));
+
+        let context = WorkerContext::new(consumer, TestMessageBus);
+        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config(), context);
+
+        let incoming = TestIncomingMessage {
+            key: None,
+            headers: Default::default(),
+            payload: vec![42],
+        };
+
+        workers.dispatch(incoming);
+
+        let event1 = rx.recv().await.unwrap();
+        let event2 = rx.recv().await.unwrap();
+
+        assert_eq!(event1, Event::ProcessStart);
+        assert_eq!(event2, Event::ProcessEnd(Confirmation::Ack));
+    }
+
+    #[tokio::test]
+    async fn hooks_with_cache() {
+        struct TestHook(UnboundedSender<Option<Num>>);
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        struct Num(i32);
+
+        impl Hook for TestHook {
+            fn on_processing_start(&self, req: &mut ProcessContext<'_>) {
+                req.cache_mut().set(Num(42));
+            }
+
+            fn on_processing_end(&self, req: &ProcessContext<'_>, _: Confirmation) {
+                let num: Option<Num> = req.cache().get().cloned();
+                self.0.send(num).unwrap();
+            }
+        }
+
+        let (tx, mut rx) = unbounded_channel();
+        let consumer = MessageConsumer::default().hook(TestHook(tx));
+
+        let context = WorkerContext::new(consumer, TestMessageBus);
+        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config(), context);
+
+        let incoming = TestIncomingMessage {
+            key: None,
+            headers: Default::default(),
+            payload: vec![42],
+        };
+
+        workers.dispatch(incoming);
+
+        let num = rx.recv().await.unwrap();
+
+        assert_eq!(num, Some(Num(42)));
     }
 }

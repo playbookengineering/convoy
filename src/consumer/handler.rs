@@ -19,7 +19,7 @@ pub enum HandlerError {
 }
 
 pub trait Handler: Send + Sync + 'static {
-    fn call(&self, msg: ProcessContext<'_>) -> Result<HandlerFuture, HandlerError>;
+    fn call(&self, msg: &ProcessContext<'_>) -> Result<HandlerFuture, HandlerError>;
 
     fn sentinels(&mut self) -> Vec<Box<dyn Sentinel>>;
 }
@@ -55,12 +55,12 @@ macro_rules! impl_async_message_handler {
                 <$extract as TryExtract>::Error: Send + Sync + 'static,
             )*
         {
-            fn call(&self, msg: ProcessContext<'_>) -> Result<HandlerFuture, HandlerError> {
+            fn call(&self, msg: &ProcessContext<'_>) -> Result<HandlerFuture, HandlerError> {
                 $(
                     let $extract = $extract::try_extract(&msg).map_err(|err| HandlerError::ExtractError(Box::new(err)))?;
                 )*
 
-                let message: M = msg.into_message(Json).map_err(|err| HandlerError::DecodeError(Box::new(err)))?;
+                let message: M = msg.extract_message(Json).map_err(|err| HandlerError::DecodeError(Box::new(err)))?;
 
                 let future = (self.fun)(message, $($extract,)*);
 
@@ -142,12 +142,12 @@ macro_rules! impl_async_fallback_handler {
                 <$extract as TryExtract>::Error: Send + Sync + 'static,
             )*
         {
-            fn call(&self, msg: ProcessContext<'_>) -> Result<HandlerFuture, HandlerError> {
+            fn call(&self, msg: &ProcessContext<'_>) -> Result<HandlerFuture, HandlerError> {
                 $(
                     let $extract = $extract::try_extract(&msg).map_err(|err| HandlerError::ExtractError(Box::new(err)))?;
                 )*
 
-                let msg = msg.into_owned();
+                let msg = msg.to_owned();
                 let future = (self.fun)(msg, $($extract,)*);
 
                 Ok(Box::pin(async move { future.await.into() }))

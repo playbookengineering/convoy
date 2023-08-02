@@ -144,9 +144,12 @@ mod test {
         let received = rx.recv().await.unwrap();
 
         assert_eq!(received.key, expected_key);
-        assert_eq!(received.headers.get("kind").unwrap(), TestMessage::KIND);
         assert_eq!(
-            received.headers.get("content-type").unwrap(),
+            received.headers.get("x-convoy-kind").unwrap(),
+            TestMessage::KIND
+        );
+        assert_eq!(
+            received.headers.get("x-convoy-content-type").unwrap(),
             Json::CONTENT_TYPE
         );
 

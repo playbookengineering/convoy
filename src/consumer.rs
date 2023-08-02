@@ -20,9 +20,13 @@ mod worker;
 pub use extension::Extension;
 pub use extract::TryExtract;
 pub use handler::{Handler, MessageHandler};
+pub use hook::Hook;
 pub use sentinel::Sentinel;
 
 pub(crate) use extension::Extensions;
+pub(crate) use hook::Hooks;
+
+pub mod hook;
 
 use thiserror::Error;
 
@@ -36,6 +40,7 @@ pub enum MessageConsumerError {
 pub struct MessageConsumer {
     router: Router,
     extensions: Extensions,
+    hooks: Hooks,
 }
 
 impl MessageConsumer {
@@ -76,6 +81,16 @@ impl MessageConsumer {
         }
     }
 
+    pub fn hook<T>(self, hook: T) -> Self
+    where
+        T: Hook,
+    {
+        Self {
+            hooks: self.hooks.push(hook),
+            ..self
+        }
+    }
+
     pub async fn listen<B: MessageBus>(
         mut self,
         config: WorkerPoolConfig,
@@ -95,8 +110,7 @@ impl MessageConsumer {
             return Err(MessageConsumerError::SentinelError(abortable));
         }
 
-        let Self { router, extensions } = self;
-        let ctx = WorkerContext::new(router, extensions, bus);
+        let ctx = WorkerContext::new(self, bus);
 
         let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx.clone());
 
@@ -108,7 +122,7 @@ impl MessageConsumer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confirmation {
     Ack,
     Nack,
@@ -139,22 +153,22 @@ mod test {
 
     use super::*;
 
-    async fn fallback_handler_missing_states(
-        _msg: RawMessage,
-        _s1: Extension<()>,
-        _s2: Extension<((), ())>,
-    ) {
-    }
-
-    async fn message_handler_missing_states(
-        _msg: TestMessage,
-        _s1: Extension<()>,
-        _s2: Extension<((), ())>,
-    ) {
-    }
-
     #[tokio::test]
     async fn detect_missing_extensions() {
+        async fn fallback_handler_missing_states(
+            _msg: RawMessage,
+            _s1: Extension<()>,
+            _s2: Extension<((), ())>,
+        ) {
+        }
+
+        async fn message_handler_missing_states(
+            _msg: TestMessage,
+            _s1: Extension<()>,
+            _s2: Extension<((), ())>,
+        ) {
+        }
+
         let consumer = MessageConsumer::default()
             .message_handler(message_handler_missing_states)
             .fallback_handler(fallback_handler_missing_states);
