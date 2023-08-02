@@ -7,7 +7,7 @@ use std::{
     ops::Deref,
 };
 
-use super::{extract::TryExtract, sentinel::Sentinel, MessageConsumerBuilder};
+use super::{extract::TryExtract, sentinel::Sentinel, MessageConsumer};
 
 use super::context::ProcessContext;
 
@@ -75,7 +75,7 @@ impl<T: Debug> Debug for MissingExtension<T> {
 }
 
 impl<T: Debug + Send + Sync + 'static> Sentinel for MissingExtension<T> {
-    fn abort(&self, consumer: &MessageConsumerBuilder) -> bool {
+    fn abort(&self, consumer: &MessageConsumer) -> bool {
         consumer.extensions.get::<T>().is_none()
     }
 

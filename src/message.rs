@@ -4,8 +4,8 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::RawHeaders;
 
-pub const CONTENT_TYPE_HEADER: &str = "content-type";
-pub const KIND_HEADER: &str = "kind";
+pub const CONTENT_TYPE_HEADER: &str = "x-convoy-content-type";
+pub const KIND_HEADER: &str = "x-convoy-kind";
 
 pub trait Message: Send + Sync + 'static {
     const KIND: &'static str;

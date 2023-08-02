@@ -33,12 +33,12 @@ pub enum MessageConsumerError {
 }
 
 #[derive(Default)]
-pub struct MessageConsumerBuilder {
+pub struct MessageConsumer {
     router: Router,
     extensions: Extensions,
 }
 
-impl MessageConsumerBuilder {
+impl MessageConsumer {
     pub fn message_handler<H, Fun, Args, M>(self, handler: H) -> Self
     where
         Fun: 'static,
@@ -155,7 +155,7 @@ mod test {
 
     #[tokio::test]
     async fn detect_missing_extensions() {
-        let consumer = MessageConsumerBuilder::default()
+        let consumer = MessageConsumer::default()
             .message_handler(message_handler_missing_states)
             .fallback_handler(fallback_handler_missing_states);
 
