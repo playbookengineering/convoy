@@ -1,6 +1,7 @@
 pub(crate) mod codec;
 pub(crate) mod message;
 pub(crate) mod message_bus;
+pub(crate) mod utils;
 
 pub mod consumer;
 pub mod integration;
@@ -128,6 +129,19 @@ pub(crate) mod test {
 
         fn key(&self) -> Option<&str> {
             self.key.as_deref()
+        }
+
+        fn make_span(&self) -> tracing::Span {
+            tracing::info_span!(
+                "consumer",
+                otel.name = "test message receive",
+                otel.kind = "CONSUMER",
+                otel.status_code = tracing::field::Empty,
+                messaging.system = "test",
+                messaging.operation = "receive",
+                messaging.message.payload_size_bytes = self.payload.len(),
+                messaging.test.message.key = self.key().unwrap_or_default()
+            )
         }
     }
 

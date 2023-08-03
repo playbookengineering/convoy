@@ -1,10 +1,15 @@
 use murmur2::KAFKA_SEED;
 use rand::{rngs::ThreadRng, Rng};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
     message_bus::{IncomingMessage, MessageBus},
+    utils::InstrumentWithContext,
     MessageConsumer,
 };
 
@@ -110,10 +115,10 @@ impl<B: MessageBus> WorkerPool<B> {
         }
     }
 
-    pub fn dispatch(&mut self, message: B::IncomingMessage) {
+    pub async fn dispatch(&mut self, message: B::IncomingMessage) {
         match &mut self.workers {
-            Flavour::Fixed(f) => f.dispatch(message),
-            Flavour::KeyRouted(kr) => kr.dispatch(message),
+            Flavour::Fixed(f) => f.dispatch(message).await,
+            Flavour::KeyRouted(kr) => kr.dispatch(message).await,
         }
     }
 }
@@ -126,7 +131,7 @@ impl<B: MessageBus> Fixed<B> {
         }
     }
 
-    fn dispatch(&mut self, msg: B::IncomingMessage) {
+    async fn dispatch(&mut self, msg: B::IncomingMessage) {
         let worker_idx = match msg.key() {
             Some(key) => {
                 let hash = murmur2::murmur2(key.as_bytes(), KAFKA_SEED) as usize;
@@ -135,7 +140,7 @@ impl<B: MessageBus> Fixed<B> {
             None => self.rng.gen_range(0..self.workers.len()),
         };
 
-        self.workers[worker_idx].dispatch(msg);
+        self.workers[worker_idx].dispatch(msg).await
     }
 }
 
@@ -156,7 +161,7 @@ impl<B: MessageBus> KeyRouted<B> {
         }
     }
 
-    fn dispatch(&mut self, msg: B::IncomingMessage) {
+    async fn dispatch(&mut self, msg: B::IncomingMessage) {
         match msg.key() {
             Some(key) => {
                 let key = key.to_string();
@@ -165,52 +170,54 @@ impl<B: MessageBus> KeyRouted<B> {
                     .entry(key.clone())
                     .or_insert_with(|| launch_worker(self.context.clone(), WorkerId(key)));
 
-                worker.dispatch(msg)
+                worker.dispatch(msg).await
             }
-            None => self.fallback.dispatch(msg),
+            None => self.fallback.dispatch(msg).await,
         }
     }
 }
 
 pub struct WorkerState<B: MessageBus> {
-    sender: UnboundedSender<WorkerEvent<B>>,
+    sender: Sender<B::IncomingMessage>,
+    last_received: Instant,
 }
 
 impl<B: MessageBus> WorkerState<B> {
-    fn dispatch(&self, message: B::IncomingMessage) {
+    async fn dispatch(&mut self, message: B::IncomingMessage) {
+        self.last_received = Instant::now();
+
         self.sender
-            .send(WorkerEvent::IncomingMessage(message))
+            .send(message)
+            .await
             .expect("failed to send, this is a bug");
     }
 }
 
 impl<B: MessageBus> Drop for WorkerState<B> {
     fn drop(&mut self) {
-        let _ = self.sender.send(WorkerEvent::Termination);
+        //let _ = self.sender.blocking_send(WorkerEvent::Termination);
     }
 }
 
 fn launch_worker<B: MessageBus>(context: WorkerContext<B>, id: WorkerId) -> WorkerState<B> {
-    let (tx, rx) = mpsc::unbounded_channel::<WorkerEvent<B>>();
+    let (tx, rx) = mpsc::channel(128);
 
     tokio::spawn(TASK_LOCALS.scope(Default::default(), worker::<B>(context, rx, id)));
 
-    WorkerState { sender: tx }
+    WorkerState {
+        sender: tx,
+        last_received: Instant::now(),
+    }
 }
 
 async fn worker<B: MessageBus>(
     worker_context: WorkerContext<B>,
-    mut receiver: UnboundedReceiver<WorkerEvent<B>>,
+    mut receiver: Receiver<B::IncomingMessage>,
     id: WorkerId,
 ) {
     TaskLocal::<WorkerId>::set_internal(id);
 
     while let Some(message) = receiver.recv().await {
-        let message = match message {
-            WorkerEvent::IncomingMessage(msg) => msg,
-            WorkerEvent::Termination => return,
-        };
-
         let bus = worker_context.bus();
         let extensions = worker_context.extensions();
         let router = worker_context.router();
@@ -218,41 +225,59 @@ async fn worker<B: MessageBus>(
         let payload = message.payload();
         let headers = message.headers();
 
+        let span = message.make_span();
         let mut cache = LocalCache::default();
 
-        let mut process_context = ProcessContext::new(payload, headers, extensions, &mut cache);
-
-        worker_context
-            .hooks()
-            .on_processing_start(&mut process_context);
-
-        let confirmation = match router.route(&process_context).await {
-            Ok(confirmation) => confirmation,
-            Err(err) => {
-                tracing::error!("Handler error occurred: {err}");
-                continue;
-            }
-        };
-
-        let confirmation_store_result = match confirmation {
-            super::Confirmation::Ack => bus.ack(&message).await,
-            super::Confirmation::Nack => bus.nack(&message).await,
-            super::Confirmation::Reject => bus.reject(&message).await,
-        };
-
-        if let Err(err) = confirmation_store_result {
-            tracing::error!("Failed to store confirmation result: {err}");
+        if cfg!(feature = "opentelemetry") {
+            extract_otel_context(&span, &headers);
         }
 
-        worker_context
-            .hooks()
-            .on_processing_end(&process_context, confirmation);
+        async {
+            let mut process_context = ProcessContext::new(payload, headers, extensions, &mut cache);
+
+            worker_context
+                .hooks()
+                .on_processing_start(&mut process_context);
+
+            let confirmation = match router.route(&process_context).await {
+                Ok(confirmation) => confirmation,
+                Err(err) => {
+                    tracing::error!("Handler error occurred: {err}");
+                    return;
+                }
+            };
+
+            let confirmation_store_result = match confirmation {
+                super::Confirmation::Ack => bus.ack(&message).await,
+                super::Confirmation::Nack => bus.nack(&message).await,
+                super::Confirmation::Reject => bus.reject(&message).await,
+            };
+
+            if let Err(err) = confirmation_store_result {
+                tracing::error!("Failed to store confirmation result: {err}");
+            }
+
+            worker_context
+                .hooks()
+                .on_processing_end(&process_context, confirmation);
+        }
+        .instrument_cx(span)
+        .await
     }
 }
 
-enum WorkerEvent<B: MessageBus> {
-    IncomingMessage(B::IncomingMessage),
-    Termination,
+#[cfg(not(feature = "opentelemetry"))]
+#[allow(unused)]
+fn extract_otel_context(_: &tracing::Span, _: &crate::RawHeaders) {}
+
+#[cfg(feature = "opentelemetry")]
+#[inline(always)]
+fn extract_otel_context(span: &tracing::Span, headers: &crate::RawHeaders) {
+    use opentelemetry::global::get_text_map_propagator;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    let parent_context = get_text_map_propagator(|propagator| propagator.extract(headers));
+    span.set_parent(parent_context);
 }
 
 #[derive(Debug, Clone, Default)]
@@ -272,7 +297,7 @@ mod test {
     use crate::test::{TestIncomingMessage, TestMessage, TestMessageBus};
     use crate::{consumer::Extension, RawHeaders, RawMessage};
 
-    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
     async fn handler(
         message: TestMessage,
@@ -316,7 +341,7 @@ mod test {
 
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
 
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
         let (processed, worker_id, _) = rx.recv().await.unwrap();
 
         assert_eq!(message, processed);
@@ -325,7 +350,7 @@ mod test {
         let message = TestMessage::new(12);
 
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
         let (processed, worker_id, _) = rx.recv().await.unwrap();
 
         assert_eq!(message, processed);
@@ -334,7 +359,7 @@ mod test {
         let message = TestMessage::new(9);
 
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
         let (processed, worker_id, _) = rx.recv().await.unwrap();
 
         assert_eq!(message, processed);
@@ -359,7 +384,7 @@ mod test {
             payload: vec![42],
         };
 
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
         let (processed_raw, _) = rx.recv().await.unwrap();
 
         assert_eq!(processed_raw.payload, [42]);
@@ -382,7 +407,7 @@ mod test {
             let message = TestMessage::new(0);
 
             let incoming = TestIncomingMessage::create_raw_json(message.clone());
-            workers.dispatch(incoming);
+            workers.dispatch(incoming).await;
             let (processed, worker_id, call_counter) = rx.recv().await.unwrap();
 
             assert_eq!(message, processed);
@@ -392,7 +417,7 @@ mod test {
             let message = TestMessage::new(1);
 
             let incoming = TestIncomingMessage::create_raw_json(message.clone());
-            workers.dispatch(incoming);
+            workers.dispatch(incoming).await;
             let (processed, worker_id, call_counter) = rx.recv().await.unwrap();
 
             assert_eq!(message, processed);
@@ -402,7 +427,7 @@ mod test {
             let message = TestMessage::new(2);
 
             let incoming = TestIncomingMessage::create_raw_json(message.clone());
-            workers.dispatch(incoming);
+            workers.dispatch(incoming).await;
             let (processed, worker_id, call_counter) = rx.recv().await.unwrap();
 
             assert_eq!(message, processed);
@@ -429,7 +454,7 @@ mod test {
             payload: vec![42],
         };
 
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
         let (processed_raw, worker_id) = rx.recv().await.unwrap();
 
         assert_eq!(processed_raw.payload, [42]);
@@ -470,7 +495,7 @@ mod test {
             payload: vec![42],
         };
 
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
 
         let event1 = rx.recv().await.unwrap();
         let event2 = rx.recv().await.unwrap();
@@ -509,7 +534,7 @@ mod test {
             payload: vec![42],
         };
 
-        workers.dispatch(incoming);
+        workers.dispatch(incoming).await;
 
         let num = rx.recv().await.unwrap();
 

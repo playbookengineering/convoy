@@ -115,7 +115,7 @@ impl MessageConsumer {
         let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx.clone());
 
         while let Ok(msg) = ctx.bus().recv().await {
-            worker_pool.dispatch(msg);
+            worker_pool.dispatch(msg).await;
         }
 
         Ok(())

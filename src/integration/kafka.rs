@@ -137,6 +137,24 @@ impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
     fn key(&self) -> Option<&str> {
         self.message.key().and_then(|x| std::str::from_utf8(x).ok())
     }
+
+    fn make_span(&self) -> tracing::Span {
+        let msg = self.message();
+
+        // https://opentelemetry.io/docs/specs/otel/trace/semantic_conventions/messaging/#apache-kafka
+        tracing::info_span!(
+            "consumer",
+            otel.name = %format!("{} receive", msg.topic()).as_str(),
+            otel.kind = "CONSUMER",
+            otel.status_code = tracing::field::Empty,
+            messaging.system = "kafka",
+            messaging.operation = "receive",
+            messaging.message.payload_size_bytes = msg.payload_len(),
+            messaging.kafka.source.partition = msg.partition(),
+            messaging.kafka.message.key = msg.key().and_then(|k| std::str::from_utf8(k).ok()).unwrap_or_default(),
+            messaging.kafka.message.offset = msg.offset(),
+        )
+    }
 }
 
 #[derive(Debug, Default)]
@@ -213,13 +231,37 @@ impl<C: ClientContext + 'static> Producer for KafkaProducer<C> {
 
         let record = FutureRecord::to(topic)
             .key(&key)
-            .payload(&payload)
-            .headers(headers);
+            .headers(headers)
+            .payload(&payload);
 
         self.producer
             .send(record, Duration::from_secs(10))
             .await
             .map(|_| ())
             .map_err(|err| err.0)
+    }
+
+    fn make_span(
+        &self,
+        key: &str,
+        _headers: &RawHeaders,
+        _payload: &[u8],
+        options: &Self::Options,
+    ) -> tracing::Span {
+        let topic = options
+            .topic_override
+            .as_deref()
+            .unwrap_or(self.topic.as_str());
+
+        tracing::info_span!(
+            "producer",
+            otel.name = %format!("{} send", topic).as_str(),
+            otel.kind = "PRODUCER",
+            otel.status_code = tracing::field::Empty,
+            messaging.system = "kafka",
+            messaging.destination = %topic,
+            messaging.destination_kind = "topic",
+            messaging.kafka.message_key = key,
+        )
     }
 }

@@ -28,4 +28,6 @@ pub trait IncomingMessage: Send + Sync + 'static {
     fn payload(&self) -> &[u8];
 
     fn key(&self) -> Option<&str>;
+
+    fn make_span(&self) -> tracing::Span;
 }
