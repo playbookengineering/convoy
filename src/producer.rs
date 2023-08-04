@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -33,7 +33,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         &self,
         message: M,
         options: P::Options,
-    ) -> Result<(), ProducerError<P::Error, C::EncodeError>> {
+    ) -> Result<(), ProducerError<P, C>> {
         let this = &self.0;
         let key = message.key().to_owned();
 
@@ -79,13 +79,22 @@ fn inject_otel_context(span: &tracing::Span, headers: &mut RawHeaders) {
 #[inline(always)]
 fn inject_otel_context(_: &tracing::Span, _: &mut RawHeaders) {}
 
-#[derive(Debug, thiserror::Error)]
-pub enum ProducerError<P: Error, C: Error> {
+#[derive(thiserror::Error)]
+pub enum ProducerError<P: Producer, C: Codec> {
     #[error("Failed to produce message: {0}")]
-    SendError(P),
+    SendError(P::Error),
 
     #[error("Failed to encode message: {0}")]
-    EncodeError(C),
+    EncodeError(C::EncodeError),
+}
+
+impl<P: Producer, C: Codec> Debug for ProducerError<P, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProducerError::SendError(s) => Debug::fmt(&s, f),
+            ProducerError::EncodeError(e) => Debug::fmt(&e, f),
+        }
+    }
 }
 
 #[async_trait]
