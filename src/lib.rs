@@ -1,8 +1,7 @@
-pub(crate) mod codec;
 pub(crate) mod message;
-pub(crate) mod message_bus;
 pub(crate) mod utils;
 
+pub mod codec;
 pub mod consumer;
 pub mod integration;
 pub mod producer;
@@ -11,7 +10,6 @@ use std::collections::HashMap;
 
 pub use consumer::MessageConsumer;
 pub use message::{Message, RawMessage};
-pub use message_bus::MessageBus;
 
 pub type RawHeaders = HashMap<String, String>;
 
@@ -22,9 +20,9 @@ pub(crate) mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::{
+        consumer::{IncomingMessage, MessageBus},
         message::{CONTENT_TYPE_HEADER, KIND_HEADER},
-        message_bus::IncomingMessage,
-        Message, MessageBus, RawHeaders,
+        Message, RawHeaders,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq)]

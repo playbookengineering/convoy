@@ -3,7 +3,7 @@ use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
-pub trait Codec: Debug {
+pub trait Codec: Debug + Send + Sync + 'static {
     type EncodeError: Error + Send + Sync + 'static;
     type DecodeError: Error + Send + Sync + 'static;
 

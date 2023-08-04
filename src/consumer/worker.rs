@@ -7,18 +7,14 @@ use std::{
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
-use crate::{
-    message_bus::{IncomingMessage, MessageBus},
-    utils::InstrumentWithContext,
-    MessageConsumer,
-};
+use crate::{utils::InstrumentWithContext, MessageConsumer};
 
 use super::{
     context::{LocalCache, ProcessContext},
     extension::Extensions,
     router::Router,
     task_local::{TaskLocal, TASK_LOCALS},
-    Hooks,
+    Hooks, IncomingMessage, MessageBus,
 };
 
 pub struct WorkerPool<B: MessageBus> {
@@ -663,7 +659,7 @@ mod test {
         let event2 = rx.recv().await.unwrap();
 
         assert_eq!(event1, Event::ProcessStart);
-        assert_eq!(event2, Event::ProcessEnd(Confirmation::Ack));
+        assert_eq!(event2, Event::ProcessEnd(Confirmation::Reject));
     }
 
     #[tokio::test]

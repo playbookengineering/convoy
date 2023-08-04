@@ -41,3 +41,9 @@ pub struct RawMessage {
     pub payload: Vec<u8>,
     pub headers: RawHeaders,
 }
+
+impl RawMessage {
+    pub fn kind(&self) -> Option<&str> {
+        self.headers.get(KIND_HEADER).map(|x| x.as_str())
+    }
+}

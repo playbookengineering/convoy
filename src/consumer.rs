@@ -1,14 +1,13 @@
 use std::{
+    future::Future,
     mem,
     pin::Pin,
     task::{Context, Poll},
     time::Instant,
 };
 
-use crate::{Message, MessageBus};
-
 use self::{
-    handler::{AsyncFnFallbackHandler, AsyncFnMessageHandler},
+    handler::RoutableHandler,
     router::Router,
     worker::{WorkerContext, WorkerPool, WorkerPoolConfig},
 };
@@ -17,6 +16,7 @@ mod context;
 mod extension;
 mod extract;
 mod handler;
+mod message_bus;
 mod router;
 mod sentinel;
 pub(crate) mod task_local;
@@ -25,8 +25,9 @@ mod worker;
 pub use extension::Extension;
 pub use extract::TryExtract;
 use futures_lite::{Stream, StreamExt};
-pub use handler::{Handler, MessageHandler};
+pub use handler::Handler;
 pub use hook::Hook;
+pub use message_bus::{IncomingMessage, MessageBus};
 pub use sentinel::Sentinel;
 
 pub(crate) use extension::Extensions;
@@ -51,13 +52,12 @@ pub struct MessageConsumer {
 }
 
 impl MessageConsumer {
-    pub fn message_handler<H, Fun, Args, M>(self, handler: H) -> Self
+    pub fn message_handler<Fun, Args>(self, handler: Fun) -> Self
     where
-        Fun: 'static,
-        Args: 'static,
-        M: Message,
-        H: Into<AsyncFnMessageHandler<Fun, Args, M>>,
-        AsyncFnMessageHandler<Fun, Args, M>: MessageHandler,
+        Fun: RoutableHandler<Args>
+            + Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+            + 'static,
+        Args: Send + Sync + 'static,
     {
         Self {
             router: self.router.message_handler(handler),
@@ -65,12 +65,10 @@ impl MessageConsumer {
         }
     }
 
-    pub fn fallback_handler<H, Fun, Args>(self, handler: H) -> Self
+    pub fn fallback_handler<Fun, Args>(self, handler: Fun) -> Self
     where
-        Fun: 'static,
-        Args: 'static,
-        H: Into<AsyncFnFallbackHandler<Fun, Args>>,
-        AsyncFnFallbackHandler<Fun, Args>: Handler,
+        Fun: Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
+        Args: Send + Sync + 'static,
     {
         Self {
             router: self.router.fallback_handler(handler),

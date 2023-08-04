@@ -14,7 +14,7 @@ use rdkafka::{
 };
 
 use crate::{
-    message_bus::{IncomingMessage, MessageBus},
+    consumer::{IncomingMessage, MessageBus},
     producer::Producer,
     RawHeaders,
 };

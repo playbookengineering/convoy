@@ -49,7 +49,7 @@ impl Display for ExtensionExtractError {
 
 impl Error for ExtensionExtractError {}
 
-impl<T: Debug + Clone + Send + Sync + 'static> TryExtract for Extension<T> {
+impl<T: Clone + Send + Sync + 'static> TryExtract for Extension<T> {
     type Error = ExtensionExtractError;
 
     fn try_extract(message: &ProcessContext<'_>) -> Result<Self, Self::Error> {
@@ -68,13 +68,13 @@ impl<T: Debug + Clone + Send + Sync + 'static> TryExtract for Extension<T> {
 
 pub struct MissingExtension<T>(PhantomData<T>);
 
-impl<T: Debug> Debug for MissingExtension<T> {
+impl<T> Debug for MissingExtension<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MissingExtension({})", std::any::type_name::<T>())
     }
 }
 
-impl<T: Debug + Send + Sync + 'static> Sentinel for MissingExtension<T> {
+impl<T: Send + Sync + 'static> Sentinel for MissingExtension<T> {
     fn abort(&self, consumer: &MessageConsumer) -> bool {
         consumer.extensions.get::<T>().is_none()
     }

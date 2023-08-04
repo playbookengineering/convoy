@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -9,14 +9,25 @@ use crate::{
     Message, RawHeaders,
 };
 
-pub struct MessageProducer<P: Producer, C: Codec> {
+pub struct MessageProducer<P: Producer, C: Codec>(Arc<MessageProducerInner<P, C>>);
+
+struct MessageProducerInner<P, C> {
     producer: P,
     codec: C,
 }
 
+impl<P: Producer, C: Codec> Clone for MessageProducer<P, C> {
+    fn clone(&self) -> Self {
+        let incref = Arc::clone(&self.0);
+        Self(incref)
+    }
+}
+
 impl<P: Producer, C: Codec> MessageProducer<P, C> {
     pub fn new(producer: P, codec: C) -> Self {
-        Self { producer, codec }
+        let inner = MessageProducerInner { producer, codec };
+
+        Self(Arc::new(inner))
     }
 
     pub async fn produce<M: Message>(
@@ -24,11 +35,12 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         message: M,
         options: P::Options,
     ) -> Result<(), ProducerError<P::Error, C::EncodeError>> {
+        let this = &self.0;
         let key = message.key().to_owned();
 
         let (body, headers) = message.into_body_and_headers();
 
-        let payload = self
+        let payload = this
             .codec
             .encode(body)
             .map_err(ProducerError::EncodeError)?;
@@ -38,13 +50,13 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         headers.insert(KIND_HEADER.to_owned(), M::KIND.to_owned());
         headers.insert(CONTENT_TYPE_HEADER.to_owned(), C::CONTENT_TYPE.to_owned());
 
-        let span = self.producer.make_span(&key, &headers, &payload, &options);
+        let span = this.producer.make_span(&key, &headers, &payload, &options);
 
         if cfg!(feature = "opentelemetry") {
             inject_otel_context(&span, &mut headers);
         }
 
-        self.producer
+        this.producer
             .send(key, headers, payload, options)
             .instrument_cx(span)
             .await
@@ -78,9 +90,9 @@ pub enum ProducerError<P: Error, C: Error> {
 }
 
 #[async_trait]
-pub trait Producer: Send + Sync + Sized + 'static {
+pub trait Producer: Send + Sync + 'static {
     type Options: Default + Send;
-    type Error: Error;
+    type Error: Error + Send + Sync + 'static;
 
     async fn send(
         &self,

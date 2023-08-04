@@ -1,19 +1,17 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future, pin::Pin};
 
-use crate::{Message, RawMessage};
+use crate::RawMessage;
 
 use super::{
     context::ProcessContext,
-    handler::{
-        AsyncFnFallbackHandler, AsyncFnMessageHandler, Handler, HandlerError, MessageHandler,
-    },
+    handler::{BoxedHandler, ErasedHandler, Handler, HandlerError, RoutableHandler},
     sentinel::Sentinel,
     Confirmation,
 };
 
 pub struct Router {
-    handlers: HashMap<&'static str, Box<dyn Handler>>,
-    fallback_handler: Box<dyn Handler>,
+    handlers: HashMap<&'static str, BoxedHandler<()>>,
+    fallback_handler: BoxedHandler<()>,
     pub(crate) sentinels: Vec<Box<dyn Sentinel>>,
 }
 
@@ -21,43 +19,41 @@ impl Default for Router {
     fn default() -> Self {
         Self {
             handlers: Default::default(),
-            fallback_handler: Box::new(AsyncFnFallbackHandler::from(default_fallback_handler)),
-            // default_fallback_handler does not carry any sentinels
+            fallback_handler: Box::new(ErasedHandler::new(|raw: RawMessage| async move {
+                match raw.kind() {
+                    Some(kind) => tracing::warn!("Rejecting unrouted message with key: {kind}"),
+                    None => tracing::warn!("Rejecting unrouted message (no key)"),
+                };
+
+                Confirmation::Reject
+            })),
             sentinels: Default::default(),
         }
     }
 }
 
 impl Router {
-    pub fn message_handler<H, Fun, Args, M>(mut self, handler: H) -> Self
+    pub fn message_handler<Fun, Args>(mut self, handler: Fun) -> Self
     where
-        Fun: 'static,
-        Args: 'static,
-        M: Message,
-        H: Into<AsyncFnMessageHandler<Fun, Args, M>>,
-        AsyncFnMessageHandler<Fun, Args, M>: MessageHandler,
+        Fun: RoutableHandler<Args>
+            + Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+            + 'static,
+        Args: Send + Sync + 'static,
     {
-        let mut handler = handler.into();
-        let kind = handler.kind();
-
         self.sentinels.extend(handler.sentinels());
-        self.handlers.insert(kind, Box::new(handler));
+        self.handlers
+            .insert(handler.kind(), Box::new(ErasedHandler::new(handler)));
 
         self
     }
 
-    pub fn fallback_handler<H, Fun, Args>(mut self, handler: H) -> Self
+    pub fn fallback_handler<Fun, Args>(mut self, handler: Fun) -> Self
     where
-        Fun: 'static,
-        Args: 'static,
-        H: Into<AsyncFnFallbackHandler<Fun, Args>>,
-        AsyncFnFallbackHandler<Fun, Args>: Handler,
+        Fun: Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
+        Args: Send + Sync + 'static,
     {
-        let mut handler = handler.into();
-
         self.sentinels.extend(handler.sentinels());
-        self.fallback_handler = Box::new(handler);
-
+        self.fallback_handler = Box::new(ErasedHandler::new(handler));
         self
     }
 
@@ -70,8 +66,6 @@ impl Router {
         Ok(handler.call(ctx)?.await)
     }
 }
-
-async fn default_fallback_handler(_: RawMessage) {}
 
 #[cfg(test)]
 mod test {

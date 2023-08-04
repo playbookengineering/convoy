@@ -54,7 +54,7 @@ impl<T: Default + Copy + Send + 'static> TaskLocal<T> {
     }
 }
 
-impl<T: Default + 'static> TryExtract for TaskLocal<T> {
+impl<T: Default + Send + Sync + Sized + 'static> TryExtract for TaskLocal<T> {
     type Error = Infallible;
 
     fn try_extract(_: &ProcessContext<'_>) -> Result<Self, Self::Error> {

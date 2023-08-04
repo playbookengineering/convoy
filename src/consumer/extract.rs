@@ -2,8 +2,8 @@ use std::error::Error;
 
 use super::{context::ProcessContext, sentinel::Sentinel};
 
-pub trait TryExtract: Sized + 'static {
-    type Error: Error;
+pub trait TryExtract: Send + Sync + 'static + Sized {
+    type Error: Error + Send + Sync + 'static;
 
     fn try_extract(message: &ProcessContext<'_>) -> Result<Self, Self::Error>;
 
