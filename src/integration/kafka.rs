@@ -15,8 +15,8 @@ use rdkafka::{
 
 use crate::{
     consumer::{IncomingMessage, MessageBus},
+    message::RawHeaders,
     producer::Producer,
-    RawHeaders,
 };
 
 pub struct RdKafkaOwnedMessage<C>

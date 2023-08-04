@@ -1,8 +1,8 @@
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::RawHeaders;
+pub type RawHeaders = HashMap<String, String>;
 
 pub const CONTENT_TYPE_HEADER: &str = "x-convoy-content-type";
 pub const KIND_HEADER: &str = "x-convoy-kind";

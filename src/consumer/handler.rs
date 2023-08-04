@@ -3,10 +3,10 @@ use std::{error::Error, pin::Pin};
 use std::future::Future;
 
 use crate::codec::Json;
-use crate::{Message, RawMessage};
 
 use super::context::ProcessContext;
 use super::{Confirmation, Sentinel, TryExtract};
+use crate::message::{Message, RawMessage};
 
 #[derive(thiserror::Error, Debug)]
 pub enum HandlerError {

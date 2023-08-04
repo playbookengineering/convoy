@@ -9,7 +9,7 @@ use std::{
 use self::{
     handler::RoutableHandler,
     router::Router,
-    worker::{WorkerContext, WorkerPool, WorkerPoolConfig},
+    worker::{WorkerContext, WorkerPool},
 };
 
 mod context;
@@ -22,6 +22,7 @@ mod sentinel;
 pub(crate) mod task_local;
 mod worker;
 
+pub use context::ProcessContext;
 pub use extension::Extension;
 pub use extract::TryExtract;
 use futures_lite::{Stream, StreamExt};
@@ -29,6 +30,7 @@ pub use handler::Handler;
 pub use hook::Hook;
 pub use message_bus::{IncomingMessage, MessageBus};
 pub use sentinel::Sentinel;
+pub use worker::{FixedPoolConfig, KeyRoutedPoolConfig, WorkerPoolConfig};
 
 pub(crate) use extension::Extensions;
 pub(crate) use hook::Hooks;
@@ -184,8 +186,8 @@ impl Stream for TickStream {
 mod test {
     use crate::{
         consumer::worker::FixedPoolConfig,
+        message::RawMessage,
         test::{TestMessage, TestMessageBus},
-        RawMessage,
     };
 
     use super::*;
@@ -212,7 +214,7 @@ mod test {
 
         let _error = consumer
             .listen(
-                WorkerPoolConfig::FixedPoolConfig(FixedPoolConfig { count: 10 }),
+                WorkerPoolConfig::Fixed(FixedPoolConfig { count: 10 }),
                 TestMessageBus,
             )
             .await

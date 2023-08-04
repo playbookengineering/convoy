@@ -1,6 +1,6 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
-use crate::RawMessage;
+use crate::message::RawMessage;
 
 use super::{
     context::ProcessContext,
@@ -69,7 +69,7 @@ impl Router {
 
 #[cfg(test)]
 mod test {
-    use crate::{consumer::extension::Extension, test::TestMessage, RawMessage};
+    use crate::{consumer::extension::Extension, test::TestMessage};
 
     use super::*;
 

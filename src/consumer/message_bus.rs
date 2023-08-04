@@ -2,7 +2,7 @@ use std::error::Error;
 
 use async_trait::async_trait;
 
-use crate::RawHeaders;
+use crate::message::RawHeaders;
 
 #[async_trait]
 pub trait MessageBus: Send + Sync + 'static {

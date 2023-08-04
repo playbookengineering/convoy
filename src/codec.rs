@@ -23,7 +23,7 @@ impl Codec for Json {
     type EncodeError = serde_json::Error;
     type DecodeError = serde_json::Error;
 
-    const CONTENT_TYPE: &'static str = "json";
+    const CONTENT_TYPE: &'static str = "application/json";
 
     fn encode<S: Serialize>(&self, ser: S) -> Result<Vec<u8>, Self::EncodeError> {
         let bytes = serde_json::to_vec(&ser)?;

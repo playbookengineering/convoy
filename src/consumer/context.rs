@@ -5,8 +5,9 @@ use std::{
 
 use crate::{
     codec::Codec,
-    message::{TryFromRawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
-    Message, RawHeaders, RawMessage,
+    message::{
+        Message, RawHeaders, RawMessage, TryFromRawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER,
+    },
 };
 
 use super::Extensions;
@@ -52,6 +53,14 @@ impl<'a> ProcessContext<'a> {
         self.headers
             .get(CONTENT_TYPE_HEADER)
             .map(|hdr| hdr.as_str())
+    }
+
+    pub fn headers(&self) -> &RawHeaders {
+        &self.headers
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        self.payload
     }
 
     pub fn to_owned(&self) -> RawMessage {

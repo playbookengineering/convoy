@@ -1,17 +1,9 @@
-pub(crate) mod message;
-pub(crate) mod utils;
-
 pub mod codec;
 pub mod consumer;
 pub mod integration;
+pub mod message;
 pub mod producer;
-
-use std::collections::HashMap;
-
-pub use consumer::MessageConsumer;
-pub use message::{Message, RawMessage};
-
-pub type RawHeaders = HashMap<String, String>;
+pub mod utils;
 
 #[cfg(test)]
 pub(crate) mod test {
@@ -20,9 +12,9 @@ pub(crate) mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::{
+        codec::{Codec, Json},
         consumer::{IncomingMessage, MessageBus},
-        message::{CONTENT_TYPE_HEADER, KIND_HEADER},
-        Message, RawHeaders,
+        message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
     };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,11 +66,9 @@ pub(crate) mod test {
         }
     }
 
-    impl TryFrom<RawHeaders> for Meta {
-        type Error = Infallible;
-
-        fn try_from(_: RawHeaders) -> Result<Self, Self::Error> {
-            Ok(Self)
+    impl From<RawHeaders> for Meta {
+        fn from(_: RawHeaders) -> Self {
+            Self
         }
     }
 
@@ -103,7 +93,7 @@ pub(crate) mod test {
             headers.insert(KIND_HEADER.to_owned(), TestMessage::KIND.to_owned());
             headers.insert(
                 CONTENT_TYPE_HEADER.to_owned(),
-                "application/json".to_owned(),
+                Json::CONTENT_TYPE.to_owned(),
             );
 
             let payload = serde_json::to_vec(&message.0).unwrap();
@@ -117,7 +107,7 @@ pub(crate) mod test {
     }
 
     impl IncomingMessage for TestIncomingMessage {
-        fn headers(&self) -> crate::RawHeaders {
+        fn headers(&self) -> RawHeaders {
             self.headers.clone()
         }
 

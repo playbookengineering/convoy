@@ -1,5 +1,5 @@
 use murmur2::KAFKA_SEED;
-use rand::{rngs::ThreadRng, Rng};
+use rand::{thread_rng, Rng};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -7,14 +7,14 @@ use std::{
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
-use crate::{utils::InstrumentWithContext, MessageConsumer};
+use crate::utils::InstrumentWithContext;
 
 use super::{
     context::{LocalCache, ProcessContext},
     extension::Extensions,
     router::Router,
     task_local::{TaskLocal, TASK_LOCALS},
-    Hooks, IncomingMessage, MessageBus,
+    Hooks, IncomingMessage, MessageBus, MessageConsumer,
 };
 
 pub struct WorkerPool<B: MessageBus> {
@@ -30,15 +30,25 @@ struct WorkerContextInternal<B> {
 
 #[derive(Debug)]
 pub enum WorkerPoolConfig {
-    FixedPoolConfig(FixedPoolConfig),
-    KeyRoutedPoolConfig(KeyRoutedPoolConfig),
+    Fixed(FixedPoolConfig),
+    KeyRouted(KeyRoutedPoolConfig),
 }
 
 impl WorkerPoolConfig {
+    pub fn fixed(count: usize) -> Self {
+        Self::Fixed(FixedPoolConfig { count })
+    }
+
+    pub fn key_routed(inactivity_duration: Duration) -> Self {
+        Self::KeyRouted(KeyRoutedPoolConfig {
+            inactivity_duration,
+        })
+    }
+
     pub fn timer(&self) -> Option<tokio::time::Interval> {
         match self {
-            WorkerPoolConfig::FixedPoolConfig(_) => None,
-            WorkerPoolConfig::KeyRoutedPoolConfig(kr_config) => {
+            WorkerPoolConfig::Fixed(_) => None,
+            WorkerPoolConfig::KeyRouted(kr_config) => {
                 let duration = kr_config.inactivity_duration;
 
                 Some(tokio::time::interval_at(
@@ -67,7 +77,6 @@ enum Flavour<B: MessageBus> {
 
 struct Fixed<B: MessageBus> {
     workers: Vec<WorkerState<B>>,
-    rng: ThreadRng,
 }
 impl<B: MessageBus> WorkerContext<B> {
     pub fn new(consumer: MessageConsumer, bus: B) -> Self {
@@ -102,8 +111,8 @@ impl<B: MessageBus> Clone for WorkerContext<B> {
 impl<B: MessageBus> WorkerPool<B> {
     pub fn new(config: WorkerPoolConfig, context: WorkerContext<B>) -> Self {
         match config {
-            WorkerPoolConfig::FixedPoolConfig(cfg) => Self::fixed(cfg, context),
-            WorkerPoolConfig::KeyRoutedPoolConfig(cfg) => Self::key_routed(cfg, context),
+            WorkerPoolConfig::Fixed(cfg) => Self::fixed(cfg, context),
+            WorkerPoolConfig::KeyRouted(cfg) => Self::key_routed(cfg, context),
         }
     }
 
@@ -143,10 +152,7 @@ impl<B: MessageBus> WorkerPool<B> {
 
 impl<B: MessageBus> Fixed<B> {
     fn new(workers: Vec<WorkerState<B>>) -> Self {
-        Self {
-            workers,
-            rng: rand::thread_rng(),
-        }
+        Self { workers }
     }
 
     async fn dispatch(&mut self, msg: B::IncomingMessage) {
@@ -155,7 +161,7 @@ impl<B: MessageBus> Fixed<B> {
                 let hash = murmur2::murmur2(key.as_bytes(), KAFKA_SEED) as usize;
                 hash % self.workers.len()
             }
-            None => self.rng.gen_range(0..self.workers.len()),
+            None => thread_rng().gen_range(0..self.workers.len()),
         };
 
         self.workers[worker_idx].dispatch(msg).await
@@ -320,11 +326,11 @@ async fn worker<B: MessageBus>(
 
 #[cfg(not(feature = "opentelemetry"))]
 #[allow(unused)]
-fn extract_otel_context(_: &tracing::Span, _: &crate::RawHeaders) {}
+fn extract_otel_context(_: &tracing::Span, _: &crate::message::RawHeaders) {}
 
 #[cfg(feature = "opentelemetry")]
 #[inline(always)]
-fn extract_otel_context(span: &tracing::Span, headers: &crate::RawHeaders) {
+fn extract_otel_context(span: &tracing::Span, headers: &crate::message::RawHeaders) {
     use opentelemetry::global::get_text_map_propagator;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -345,9 +351,10 @@ impl WorkerId {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::consumer::Extension;
     use crate::consumer::{Confirmation, Hook};
+    use crate::message::{RawHeaders, RawMessage};
     use crate::test::{TestIncomingMessage, TestMessage, TestMessageBus};
-    use crate::{consumer::Extension, RawHeaders, RawMessage};
 
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 

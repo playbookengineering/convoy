@@ -4,9 +4,8 @@ use async_trait::async_trait;
 
 use crate::{
     codec::Codec,
-    message::{CONTENT_TYPE_HEADER, KIND_HEADER},
+    message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
     utils::InstrumentWithContext,
-    Message, RawHeaders,
 };
 
 pub struct MessageProducer<P: Producer, C: Codec>(Arc<MessageProducerInner<P, C>>);
@@ -207,11 +206,12 @@ mod test {
 
         assert_eq!(received.key, expected_key);
         assert_eq!(
-            received.headers.get("x-convoy-kind").unwrap(),
+            received.headers.get(KIND_HEADER).unwrap(),
             TestMessage::KIND
         );
+
         assert_eq!(
-            received.headers.get("x-convoy-content-type").unwrap(),
+            received.headers.get(CONTENT_TYPE_HEADER).unwrap(),
             Json::CONTENT_TYPE
         );
 
