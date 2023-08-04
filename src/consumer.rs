@@ -7,7 +7,6 @@ use std::{
 };
 
 use self::{
-    handler::RoutableHandler,
     router::Router,
     worker::{WorkerContext, WorkerPool},
 };
@@ -22,11 +21,12 @@ mod sentinel;
 pub(crate) mod task_local;
 mod worker;
 
+use futures_lite::{Stream, StreamExt};
+
 pub use context::ProcessContext;
 pub use extension::Extension;
 pub use extract::TryExtract;
-use futures_lite::{Stream, StreamExt};
-pub use handler::Handler;
+pub use handler::{Handler, RoutableHandler};
 pub use hook::Hook;
 pub use message_bus::{IncomingMessage, MessageBus};
 pub use sentinel::Sentinel;
