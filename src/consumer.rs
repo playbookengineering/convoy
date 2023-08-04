@@ -1,4 +1,9 @@
-use std::mem;
+use std::{
+    mem,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Instant,
+};
 
 use crate::{Message, MessageBus};
 
@@ -19,6 +24,7 @@ mod worker;
 
 pub use extension::Extension;
 pub use extract::TryExtract;
+use futures_lite::{Stream, StreamExt};
 pub use handler::{Handler, MessageHandler};
 pub use hook::Hook;
 pub use sentinel::Sentinel;
@@ -29,6 +35,7 @@ pub(crate) use hook::Hooks;
 pub mod hook;
 
 use thiserror::Error;
+use tokio::time::Interval;
 
 #[derive(Debug, Error)]
 pub enum MessageConsumerError {
@@ -112,10 +119,24 @@ impl MessageConsumer {
 
         let ctx = WorkerContext::new(self, bus);
 
+        let cleanup_timer = config.timer();
+        let mut cleanup_tick_stream = TickStream(cleanup_timer);
         let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx.clone());
 
-        while let Ok(msg) = ctx.bus().recv().await {
-            worker_pool.dispatch(msg).await;
+        loop {
+            tokio::select! {
+                biased;
+                msg = ctx.bus().recv() => {
+                    if let Ok(msg) = msg {
+                        worker_pool.dispatch(msg).await
+                    } else {
+                        break;
+                    }
+                }
+                Some(time) = cleanup_tick_stream.next() => {
+                    worker_pool.do_cleanup(time);
+                }
+            }
         }
 
         Ok(())
@@ -144,9 +165,27 @@ impl<T: Into<Confirmation>, E: Into<Confirmation>> From<Result<T, E>> for Confir
     }
 }
 
+struct TickStream(Option<Interval>);
+
+impl Stream for TickStream {
+    type Item = Instant;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(interval) = &mut self.0 {
+            return match interval.poll_tick(cx) {
+                Poll::Ready(i) => Poll::Ready(Some(i.into_std())),
+                Poll::Pending => Poll::Pending,
+            };
+        }
+
+        Poll::Ready(None)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{
+        consumer::worker::FixedPoolConfig,
         test::{TestMessage, TestMessageBus},
         RawMessage,
     };
@@ -174,7 +213,10 @@ mod test {
             .fallback_handler(fallback_handler_missing_states);
 
         let _error = consumer
-            .listen(WorkerPoolConfig::KeyRoutedPoolConfig, TestMessageBus)
+            .listen(
+                WorkerPoolConfig::FixedPoolConfig(FixedPoolConfig { count: 10 }),
+                TestMessageBus,
+            )
             .await
             .unwrap_err();
     }
