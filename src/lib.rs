@@ -128,7 +128,8 @@ pub(crate) mod test {
                 messaging.system = "test",
                 messaging.operation = "receive",
                 messaging.message.payload_size_bytes = self.payload.len(),
-                messaging.test.message.key = self.key().unwrap_or_default()
+                messaging.test.message.key = self.key().unwrap_or_default(),
+                convoy.kind = tracing::field::Empty,
             )
         }
     }

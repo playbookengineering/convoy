@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tracing::Span;
 
 use crate::utils::InstrumentWithContext;
 
@@ -293,6 +294,12 @@ async fn worker<B: MessageBus>(
         async {
             let mut process_context = ProcessContext::new(payload, headers, extensions, &mut cache);
 
+            if let Some(kind) = process_context.kind() {
+                Span::current().record("convoy.kind", kind);
+            }
+
+            tracing::debug!("Message: begin processing");
+
             worker_context
                 .hooks()
                 .before_processing(&mut process_context);
@@ -318,6 +325,12 @@ async fn worker<B: MessageBus>(
             worker_context
                 .hooks()
                 .after_processing(&process_context, confirmation);
+
+            tracing::info!(
+                "Message {} processed, confirmation: {}",
+                process_context.kind().unwrap_or("unknown"),
+                confirmation,
+            );
         }
         .instrument_cx(span)
         .await

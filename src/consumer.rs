@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
     error::Error,
+    fmt::Display,
     future::Future,
     mem,
     pin::Pin,
@@ -134,7 +135,10 @@ impl MessageConsumer {
             tokio::select! {
                 biased;
                 msg = ctx.bus().recv() => {
-                    let msg = msg.map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
+                    let msg = msg.map_err(|err| {
+                        tracing::error!("Message bus error: {err}");
+                        MessageConsumerError::MessageBusError(err.into())
+                    })?;
                     worker_pool.dispatch(msg).await;
                 }
                 Some(time) = cleanup_tick_stream.next() => {
@@ -164,6 +168,18 @@ impl<T: Into<Confirmation>, E: Into<Confirmation>> From<Result<T, E>> for Confir
             Ok(ok) => ok.into(),
             Err(err) => err.into(),
         }
+    }
+}
+
+impl Display for Confirmation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Confirmation::Ack => "ack",
+            Confirmation::Nack => "nack",
+            Confirmation::Reject => "reject",
+        };
+
+        f.write_str(s)
     }
 }
 
