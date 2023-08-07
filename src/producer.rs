@@ -1,3 +1,5 @@
+mod hook;
+
 use std::{error::Error, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
@@ -8,12 +10,38 @@ use crate::{
     utils::InstrumentWithContext,
 };
 
-pub struct MessageProducer<P: Producer, C: Codec>(Arc<MessageProducerInner<P, C>>);
+use self::hook::{Hook, Hooks};
 
-struct MessageProducerInner<P, C> {
+pub struct MessageProducerBuilder<P: Producer, C: Codec> {
     producer: P,
     codec: C,
+    hooks: Hooks,
 }
+
+impl<P: Producer, C: Codec> MessageProducerBuilder<P, C> {
+    pub fn new(producer: P, codec: C) -> Self {
+        Self {
+            producer,
+            codec,
+            hooks: Hooks::default(),
+        }
+    }
+
+    pub fn hook<H>(mut self, hook: H) -> Self
+    where
+        H: Hook,
+    {
+        self.hooks = self.hooks.push(hook);
+        self
+    }
+
+    pub fn build(self) -> MessageProducer<P, C> {
+        let this = Arc::new(self);
+        MessageProducer(this)
+    }
+}
+
+pub struct MessageProducer<P: Producer, C: Codec>(Arc<MessageProducerBuilder<P, C>>);
 
 impl<P: Producer, C: Codec> Clone for MessageProducer<P, C> {
     fn clone(&self) -> Self {
@@ -23,17 +51,27 @@ impl<P: Producer, C: Codec> Clone for MessageProducer<P, C> {
 }
 
 impl<P: Producer, C: Codec> MessageProducer<P, C> {
-    pub fn new(producer: P, codec: C) -> Self {
-        let inner = MessageProducerInner { producer, codec };
-
-        Self(Arc::new(inner))
+    pub fn builder(producer: P, codec: C) -> MessageProducerBuilder<P, C> {
+        MessageProducerBuilder::new(producer, codec)
     }
 
     pub async fn produce<M: Message>(
         &self,
         message: M,
         options: P::Options,
-    ) -> Result<(), ProducerError<P, C>> {
+    ) -> Result<(), ProducerError> {
+        self.0.hooks.before_send();
+
+        let result = self.produce_impl(message, options).await;
+        self.0.hooks.after_send(&result);
+        result
+    }
+
+    async fn produce_impl<M: Message>(
+        &self,
+        message: M,
+        options: P::Options,
+    ) -> Result<(), ProducerError> {
         let this = &self.0;
         let key = message.key().to_owned();
 
@@ -42,7 +80,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         let payload = this
             .codec
             .encode(body)
-            .map_err(ProducerError::EncodeError)?;
+            .map_err(|err| ProducerError::EncodeError(err.into()))?;
 
         let mut headers: RawHeaders = headers.into();
 
@@ -59,7 +97,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
             .send(key, headers, payload, options)
             .instrument_cx(span)
             .await
-            .map_err(ProducerError::SendError)
+            .map_err(|err| ProducerError::SendError(err.into()))
     }
 }
 
@@ -79,22 +117,13 @@ fn inject_otel_context(span: &tracing::Span, headers: &mut RawHeaders) {
 #[inline(always)]
 fn inject_otel_context(_: &tracing::Span, _: &mut RawHeaders) {}
 
-#[derive(thiserror::Error)]
-pub enum ProducerError<P: Producer, C: Codec> {
+#[derive(Debug, thiserror::Error)]
+pub enum ProducerError {
     #[error("Failed to produce message: {0}")]
-    SendError(P::Error),
+    SendError(Box<dyn Error + Send + Sync>),
 
     #[error("Failed to encode message: {0}")]
-    EncodeError(C::EncodeError),
-}
-
-impl<P: Producer, C: Codec> Debug for ProducerError<P, C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProducerError::SendError(s) => Debug::fmt(&s, f),
-            ProducerError::EncodeError(e) => Debug::fmt(&e, f),
-        }
-    }
+    EncodeError(Box<dyn Error + Send + Sync>),
 }
 
 #[async_trait]
@@ -121,7 +150,7 @@ pub trait Producer: Send + Sync + 'static {
 
 #[cfg(test)]
 mod test {
-    use std::convert::Infallible;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -132,6 +161,10 @@ mod test {
 
     use super::*;
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("error occurred")]
+    pub struct TestProducerError;
+
     #[derive(Debug)]
     struct TestWireMessage {
         key: String,
@@ -141,16 +174,19 @@ mod test {
 
     struct TestProducer {
         sender: UnboundedSender<TestWireMessage>,
+        is_ok: bool,
     }
 
-    fn message_producer_with_receiver() -> (
-        MessageProducer<TestProducer, Json>,
+    fn message_producer_with_receiver(
+        is_ok: bool,
+    ) -> (
+        MessageProducerBuilder<TestProducer, Json>,
         UnboundedReceiver<TestWireMessage>,
     ) {
         let (tx, rx) = mpsc::unbounded_channel();
 
-        let producer = TestProducer { sender: tx };
-        let producer = MessageProducer::new(producer, Json);
+        let producer = TestProducer { sender: tx, is_ok };
+        let producer = MessageProducer::builder(producer, Json);
 
         (producer, rx)
     }
@@ -158,7 +194,7 @@ mod test {
     #[async_trait]
     impl Producer for TestProducer {
         type Options = ();
-        type Error = Infallible;
+        type Error = TestProducerError;
 
         async fn send(
             &self,
@@ -167,6 +203,10 @@ mod test {
             payload: Vec<u8>,
             _: Self::Options,
         ) -> Result<(), Self::Error> {
+            if !self.is_ok {
+                return Err(TestProducerError);
+            }
+
             self.sender
                 .send(TestWireMessage {
                     key,
@@ -207,7 +247,8 @@ mod test {
 
         let msg = TestMessage(expected_body.clone(), Meta);
 
-        let (producer, mut rx) = message_producer_with_receiver();
+        let (producer, mut rx) = message_producer_with_receiver(true);
+        let producer = producer.build();
 
         producer.produce(msg, ()).await.unwrap();
 
@@ -227,5 +268,57 @@ mod test {
         let body: TestMessageBody = serde_json::from_slice(&received.payload).unwrap();
 
         assert_eq!(body, expected_body);
+    }
+
+    #[tokio::test]
+    async fn produce_message_with_hooks() {
+        #[derive(Default)]
+        struct TestHook {
+            counter_before: AtomicUsize,
+            counter_after_ok: AtomicUsize,
+            counter_after_err: AtomicUsize,
+        }
+
+        impl Hook for TestHook {
+            fn before_send(&self) {
+                self.counter_before.fetch_add(1, Ordering::Relaxed);
+            }
+
+            fn after_send(&self, res: &Result<(), ProducerError>) {
+                let counter = if res.is_ok() {
+                    &self.counter_after_ok
+                } else {
+                    &self.counter_after_err
+                };
+
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let expected_key = "qwerty";
+        let expected_body = TestMessageBody {
+            id: expected_key.to_owned(),
+            data: "asdfg".to_string(),
+        };
+
+        let msg = TestMessage(expected_body.clone(), Meta);
+
+        let test_hook = Arc::new(TestHook::default());
+
+        let (producer, _rx) = message_producer_with_receiver(true);
+        let producer = producer.hook(Arc::clone(&test_hook)).build();
+
+        producer.produce(msg.clone(), ()).await.unwrap();
+
+        assert_eq!(test_hook.counter_before.load(Ordering::Relaxed), 1);
+        assert_eq!(test_hook.counter_after_ok.load(Ordering::Relaxed), 1);
+
+        let (producer, _rx) = message_producer_with_receiver(false);
+        let producer = producer.hook(Arc::clone(&test_hook)).build();
+        assert!(producer.produce(msg, ()).await.is_err());
+
+        assert_eq!(test_hook.counter_before.load(Ordering::Relaxed), 2);
+        assert_eq!(test_hook.counter_after_ok.load(Ordering::Relaxed), 1);
+        assert_eq!(test_hook.counter_after_err.load(Ordering::Relaxed), 1);
     }
 }

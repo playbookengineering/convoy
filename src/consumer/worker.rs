@@ -295,7 +295,7 @@ async fn worker<B: MessageBus>(
 
             worker_context
                 .hooks()
-                .on_processing_start(&mut process_context);
+                .before_processing(&mut process_context);
 
             let confirmation = match router.route(&process_context).await {
                 Ok(confirmation) => confirmation,
@@ -317,7 +317,7 @@ async fn worker<B: MessageBus>(
 
             worker_context
                 .hooks()
-                .on_processing_end(&process_context, confirmation);
+                .after_processing(&process_context, confirmation);
         }
         .instrument_cx(span)
         .await
@@ -638,11 +638,11 @@ mod test {
         struct TestHook(UnboundedSender<Event>);
 
         impl Hook for TestHook {
-            fn on_processing_start(&self, _: &mut ProcessContext<'_>) {
+            fn before_processing(&self, _: &mut ProcessContext<'_>) {
                 self.0.send(Event::ProcessStart).unwrap();
             }
 
-            fn on_processing_end(&self, _: &ProcessContext<'_>, confirmation: Confirmation) {
+            fn after_processing(&self, _: &ProcessContext<'_>, confirmation: Confirmation) {
                 self.0.send(Event::ProcessEnd(confirmation)).unwrap();
             }
         }
@@ -677,11 +677,11 @@ mod test {
         struct Num(i32);
 
         impl Hook for TestHook {
-            fn on_processing_start(&self, req: &mut ProcessContext<'_>) {
+            fn before_processing(&self, req: &mut ProcessContext<'_>) {
                 req.cache_mut().set(Num(42));
             }
 
-            fn on_processing_end(&self, req: &ProcessContext<'_>, _: Confirmation) {
+            fn after_processing(&self, req: &ProcessContext<'_>, _: Confirmation) {
                 let num: Option<Num> = req.cache().get().cloned();
                 self.0.send(num).unwrap();
             }

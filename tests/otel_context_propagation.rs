@@ -28,7 +28,7 @@ mod otel_test {
     struct TraceParentSender(UnboundedSender<String>);
 
     impl Hook for TraceParentSender {
-        fn on_processing_start(&self, ctx: &mut ProcessContext<'_>) {
+        fn before_processing(&self, ctx: &mut ProcessContext<'_>) {
             let headers = ctx.headers();
 
             if let Some(traceparent) = headers.get("traceparent") {
@@ -65,7 +65,7 @@ mod otel_test {
         // entry -> [ bus1 -> producer1 ] -> [ bus2 -> producer2 ] -> [ bus3 -> producer3 ] -> out
         let (entry, bus1) = in_memory::make_queue();
         let (producer1, bus2) = in_memory::make_queue();
-        let producer1 = MessageProducer::new(producer1, Json);
+        let producer1 = MessageProducer::builder(producer1, Json).build();
 
         // [ bus1 -> producer1 ]
         let consumer1 = MessageConsumer::default()
@@ -74,7 +74,7 @@ mod otel_test {
             .listen(WorkerPoolConfig::fixed(3), bus1);
 
         let (producer2, bus3) = in_memory::make_queue();
-        let producer2 = MessageProducer::new(producer2.clone(), Json);
+        let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
         // [ bus2 -> producer2 ]
         let consumer2 = MessageConsumer::default()
@@ -84,7 +84,7 @@ mod otel_test {
             .listen(WorkerPoolConfig::fixed(3), bus2);
 
         let (producer3, out) = in_memory::make_queue();
-        let producer3 = MessageProducer::new(producer3.clone(), Json);
+        let producer3 = MessageProducer::builder(producer3.clone(), Json).build();
 
         // [ bus3 -> producer3 ]
         let consumer3 = MessageConsumer::default()

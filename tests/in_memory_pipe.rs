@@ -31,7 +31,7 @@ async fn message_is_passed_through_pipeline() {
     let (entry, bus1) = in_memory::make_queue();
     let (producer1, bus2) = in_memory::make_queue();
 
-    let producer1 = MessageProducer::new(producer1, Json);
+    let producer1 = MessageProducer::builder(producer1, Json).build();
 
     // [ bus1 -> producer2 ]
     let consumer1 = MessageConsumer::default()
@@ -41,7 +41,7 @@ async fn message_is_passed_through_pipeline() {
 
     let (producer2, out) = in_memory::make_queue();
 
-    let producer2 = MessageProducer::new(producer2.clone(), Json);
+    let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
     // [ bus2 -> producer3 ]
     let consumer2 = MessageConsumer::default()

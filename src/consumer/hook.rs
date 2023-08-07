@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{context::ProcessContext, Confirmation};
 
 #[derive(Default)]
@@ -9,21 +11,39 @@ impl Hooks {
         self
     }
 
-    pub fn on_processing_start(&self, ctx: &mut ProcessContext) {
-        for hook in &self.0 {
-            hook.on_processing_start(ctx);
-        }
+    pub fn before_processing(&self, ctx: &mut ProcessContext) {
+        self.0.iter().for_each(|hook| hook.before_processing(ctx));
     }
 
-    pub fn on_processing_end(&self, ctx: &ProcessContext, confirmation: Confirmation) {
-        for hook in &self.0 {
-            hook.on_processing_end(ctx, confirmation);
-        }
+    pub fn after_processing(&self, ctx: &ProcessContext, confirmation: Confirmation) {
+        self.0
+            .iter()
+            .for_each(|hook| hook.after_processing(ctx, confirmation));
     }
 }
 
 pub trait Hook: Send + Sync + 'static {
-    fn on_processing_start(&self, _ctx: &mut ProcessContext<'_>) {}
+    fn before_processing(&self, _ctx: &mut ProcessContext<'_>) {}
 
-    fn on_processing_end(&self, _ctx: &ProcessContext<'_>, _: Confirmation) {}
+    fn after_processing(&self, _ctx: &ProcessContext<'_>, _: Confirmation) {}
+}
+
+impl<T: Hook> Hook for Box<T> {
+    fn before_processing(&self, ctx: &mut ProcessContext<'_>) {
+        (**self).before_processing(ctx)
+    }
+
+    fn after_processing(&self, ctx: &ProcessContext<'_>, confirmation: Confirmation) {
+        (**self).after_processing(ctx, confirmation)
+    }
+}
+
+impl<T: Hook> Hook for Arc<T> {
+    fn before_processing(&self, ctx: &mut ProcessContext<'_>) {
+        (**self).before_processing(ctx)
+    }
+
+    fn after_processing(&self, ctx: &ProcessContext<'_>, confirmation: Confirmation) {
+        (**self).after_processing(ctx, confirmation)
+    }
 }
