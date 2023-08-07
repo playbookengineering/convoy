@@ -9,6 +9,7 @@ edition = "2021"
 default = ["kafka"]
 kafka = ["dep:rdkafka"]
 opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
+unstable-features = []
 
 [dependencies]
 async-trait = "0.1"

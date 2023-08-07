@@ -20,7 +20,7 @@ mod handler;
 mod message_bus;
 mod router;
 mod sentinel;
-pub(crate) mod task_local;
+mod task_local;
 mod worker;
 
 use futures_lite::{Stream, StreamExt};
@@ -32,6 +32,8 @@ pub use handler::{Handler, RoutableHandler};
 pub use hook::Hook;
 pub use message_bus::{IncomingMessage, MessageBus};
 pub use sentinel::Sentinel;
+#[cfg(feature = "unstable-features")]
+pub use task_local::TaskLocal;
 pub use worker::{FixedPoolConfig, KeyRoutedPoolConfig, WorkerPoolConfig};
 
 pub(crate) use extension::Extensions;
