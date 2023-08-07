@@ -75,7 +75,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         options: P::Options,
     ) -> Result<(), ProducerError> {
         let this = &self.0;
-        let key = message.key().to_owned();
+        let key = message.key();
 
         let (body, headers) = message.into_body_and_headers();
 

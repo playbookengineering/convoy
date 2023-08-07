@@ -15,8 +15,7 @@ pub trait Message: Send + Sync + 'static {
 
     fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self;
     fn into_body_and_headers(self) -> (Self::Body, Self::Headers);
-
-    fn key(&self) -> &str;
+    fn key(&self) -> String;
 }
 
 pub trait TryFromRawHeaders: Sized {

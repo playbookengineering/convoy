@@ -61,8 +61,8 @@ pub(crate) mod test {
             (self.0, self.1)
         }
 
-        fn key(&self) -> &str {
-            &self.0.id
+        fn key(&self) -> String {
+            self.0.id.clone()
         }
     }
 
@@ -87,7 +87,7 @@ pub(crate) mod test {
 
     impl TestIncomingMessage {
         pub fn create_raw_json(message: TestMessage) -> Self {
-            let key = Some(message.key().to_owned());
+            let key = Some(message.key());
 
             let mut headers = RawHeaders::default();
             headers.insert(KIND_HEADER.to_owned(), TestMessage::KIND.to_owned());

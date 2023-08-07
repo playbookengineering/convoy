@@ -50,8 +50,8 @@ impl Message for ModelContainer {
         (self.0, self.1)
     }
 
-    fn key(&self) -> &str {
-        &self.0.id
+    fn key(&self) -> String {
+        self.0.id.clone()
     }
 }
 
