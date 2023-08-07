@@ -1,4 +1,3 @@
-use murmur2::KAFKA_SEED;
 use rand::{thread_rng, Rng};
 use std::{
     collections::HashMap,
@@ -79,7 +78,9 @@ enum Flavour<B: MessageBus> {
 
 struct Fixed<B: MessageBus> {
     workers: Vec<WorkerState<B>>,
+    hasher: ahash::RandomState,
 }
+
 impl<B: MessageBus> WorkerContext<B> {
     pub fn new(consumer: MessageConsumer, bus: B) -> Self {
         let internal = WorkerContextInternal { consumer, bus };
@@ -154,20 +155,39 @@ impl<B: MessageBus> WorkerPool<B> {
             pool.do_cleanup(now);
         }
     }
+
+    #[cfg(test)]
+    fn set_stable_seed(&mut self) {
+        match &mut self.pool {
+            Flavour::Fixed(f) => f.set_stable_seed(),
+            Flavour::KeyRouted(_) => unimplemented!(),
+        }
+    }
 }
 
 impl<B: MessageBus> Fixed<B> {
     fn new(workers: Vec<WorkerState<B>>) -> Self {
-        Self { workers }
+        let hasher = ahash::RandomState::default();
+
+        Self { workers, hasher }
+    }
+
+    #[cfg(test)]
+    fn set_stable_seed(&mut self) {
+        self.hasher = ahash::RandomState::with_seeds(0x3038, 0x3039, 0x9394, 0x1234);
     }
 
     async fn dispatch(&mut self, msg: B::IncomingMessage) {
         let worker_idx = match msg.key() {
             Some(key) => {
-                let hash = murmur2::murmur2(key.as_bytes(), KAFKA_SEED) as usize;
+                tracing::info!("message does not contain a key, fallback to rand");
+                let hash = self.hasher.hash_one(key) as usize;
                 hash % self.workers.len()
             }
-            None => thread_rng().gen_range(0..self.workers.len()),
+            None => {
+                tracing::info!("message does not contain a key, fallback to rand");
+                thread_rng().gen_range(0..self.workers.len())
+            }
         };
 
         self.workers[worker_idx].dispatch(msg).await
@@ -446,6 +466,7 @@ mod test {
         let context = WorkerContext::new(consumer, TestMessageBus);
 
         let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config_default(), context);
+        workers.set_stable_seed();
 
         let message = TestMessage::new(0);
 
@@ -464,7 +485,7 @@ mod test {
         let (processed, worker_id, _) = rx.recv().await.unwrap();
 
         assert_eq!(message, processed);
-        assert_eq!(worker_id.get(), "1");
+        assert_eq!(worker_id.get(), "0");
 
         let message = TestMessage::new(9);
 
