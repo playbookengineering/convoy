@@ -1,4 +1,6 @@
 use std::{
+    convert::Infallible,
+    error::Error,
     future::Future,
     mem,
     pin::Pin,
@@ -44,6 +46,9 @@ use tokio::time::Interval;
 pub enum MessageConsumerError {
     #[error("Failed sentinels: {0:?}")]
     SentinelError(Vec<Box<dyn Sentinel>>),
+
+    #[error("Message bus error: {0}")]
+    MessageBusError(Box<dyn Error + Send + Sync>),
 }
 
 #[derive(Default)]
@@ -102,7 +107,7 @@ impl MessageConsumer {
         mut self,
         config: WorkerPoolConfig,
         bus: B,
-    ) -> Result<(), MessageConsumerError> {
+    ) -> Result<Infallible, MessageConsumerError> {
         let sentinels = mem::take(&mut self.router.sentinels);
 
         let mut abortable = sentinels
@@ -127,19 +132,14 @@ impl MessageConsumer {
             tokio::select! {
                 biased;
                 msg = ctx.bus().recv() => {
-                    if let Ok(msg) = msg {
-                        worker_pool.dispatch(msg).await
-                    } else {
-                        break;
-                    }
+                    let msg = msg.map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
+                    worker_pool.dispatch(msg).await;
                 }
                 Some(time) = cleanup_tick_stream.next() => {
                     worker_pool.do_cleanup(time);
                 }
             }
         }
-
-        Ok(())
     }
 }
 
