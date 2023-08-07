@@ -10,7 +10,9 @@ use crate::{
     utils::InstrumentWithContext,
 };
 
-use self::hook::{Hook, Hooks};
+use self::hook::Hooks;
+
+pub use self::hook::Hook;
 
 pub struct MessageProducerBuilder<P: Producer, C: Codec> {
     producer: P,
