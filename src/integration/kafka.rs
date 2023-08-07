@@ -90,10 +90,18 @@ impl<C: ConsumerContext + 'static> MessageBus for KafkaConsumer<C> {
     type Error = rdkafka::error::KafkaError;
 
     async fn recv(&self) -> Result<Self::IncomingMessage, Self::Error> {
-        self.consumer
+        let message = self
+            .consumer
             .recv()
             .await
-            .map(|m| unsafe { RdKafkaOwnedMessage::<C>::new(&self.consumer, m) })
+            .map(|m| unsafe { RdKafkaOwnedMessage::<C>::new(&self.consumer, m) })?;
+
+        tracing::debug!(
+            "Received rdkafka message [payload_len={}]",
+            message.message.payload_len()
+        );
+
+        Ok(message)
     }
 
     async fn ack(&self, message: &Self::IncomingMessage) -> Result<(), Self::Error> {
@@ -183,16 +191,13 @@ impl KafkaProducerOptions {
 
 #[derive(Clone)]
 pub struct KafkaProducer<C: ClientContext + 'static> {
-    producer: Arc<FutureProducer<C>>,
+    producer: FutureProducer<C>,
     topic: String,
 }
 
 impl<C: ClientContext + 'static> KafkaProducer<C> {
     pub fn new(producer: FutureProducer<C>, topic: String) -> Self {
-        Self {
-            producer: Arc::new(producer),
-            topic,
-        }
+        Self { producer, topic }
     }
 }
 

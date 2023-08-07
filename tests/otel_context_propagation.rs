@@ -45,6 +45,8 @@ mod otel_test {
             if let Err(err) = producer.produce(message, ()).await {
                 tracing::info!("failed to produce: {err}");
             }
+
+            tracing::info!("produced message");
         }
         .instrument_cx(span)
         .await
@@ -54,6 +56,8 @@ mod otel_test {
         if let Err(err) = producer.produce(message, ()).await {
             tracing::info!("failed to produce: {err}");
         }
+
+        tracing::info!("processed message");
     }
 
     #[tokio::test]

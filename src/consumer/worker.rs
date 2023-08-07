@@ -2,11 +2,12 @@ use murmur2::KAFKA_SEED;
 use rand::{thread_rng, Rng};
 use std::{
     collections::HashMap,
+    fmt::Debug,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tracing::Span;
+use tracing::{instrument, Span};
 
 use crate::utils::InstrumentWithContext;
 
@@ -29,7 +30,7 @@ struct WorkerContextInternal<B> {
     bus: B,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WorkerPoolConfig {
     Fixed(FixedPoolConfig),
     KeyRouted(KeyRoutedPoolConfig),
@@ -61,12 +62,12 @@ impl WorkerPoolConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FixedPoolConfig {
     pub count: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KeyRoutedPoolConfig {
     pub inactivity_duration: Duration,
 }
@@ -111,10 +112,14 @@ impl<B: MessageBus> Clone for WorkerContext<B> {
 
 impl<B: MessageBus> WorkerPool<B> {
     pub fn new(config: WorkerPoolConfig, context: WorkerContext<B>) -> Self {
-        match config {
+        let worker = match config.clone() {
             WorkerPoolConfig::Fixed(cfg) => Self::fixed(cfg, context),
             WorkerPoolConfig::KeyRouted(cfg) => Self::key_routed(cfg, context),
-        }
+        };
+
+        tracing::info!("Initialized worker with config: {config:?}");
+
+        worker
     }
 
     fn fixed(config: FixedPoolConfig, context: WorkerContext<B>) -> Self {
@@ -253,6 +258,18 @@ enum WorkerEvent<B: MessageBus> {
     Termination,
 }
 
+impl<B: MessageBus> Debug for WorkerEvent<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerEvent::IncomingMessage(m) => f
+                .debug_struct("WorkerEvent::IncomingMessage")
+                .field("payload_len", &m.payload().len())
+                .finish(),
+            WorkerEvent::Termination => f.debug_struct("WorkerEvent::Termination").finish(),
+        }
+    }
+}
+
 fn launch_worker<B: MessageBus>(context: WorkerContext<B>, id: WorkerId) -> WorkerState<B> {
     let (tx, rx) = mpsc::channel(128);
 
@@ -264,6 +281,7 @@ fn launch_worker<B: MessageBus>(context: WorkerContext<B>, id: WorkerId) -> Work
     }
 }
 
+#[instrument(skip_all, fields(id = id.0))]
 async fn worker<B: MessageBus>(
     worker_context: WorkerContext<B>,
     mut receiver: Receiver<WorkerEvent<B>>,
@@ -271,7 +289,11 @@ async fn worker<B: MessageBus>(
 ) {
     TaskLocal::<WorkerId>::set_internal(id);
 
+    tracing::info!("Start listening");
+
     while let Some(event) = receiver.recv().await {
+        tracing::debug!("Received event: {event:?}");
+
         let message = match event {
             WorkerEvent::IncomingMessage(m) => m,
             WorkerEvent::Termination => return,
