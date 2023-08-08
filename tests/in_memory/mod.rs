@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
-    sync::atomic::{AtomicUsize, Ordering},
+    pin::Pin,
+    task::{Context, Poll},
 };
 
 use async_trait::async_trait;
@@ -9,48 +10,36 @@ use convoy::{
     message::RawHeaders,
     producer::Producer,
 };
-use tokio::sync::{
-    mpsc::{channel, Receiver, Sender},
-    Mutex,
-};
+use futures_lite::Stream;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 pub fn make_queue() -> (InMemoryProducer, InMemoryMessageBus) {
     let (tx, rx) = channel(16);
 
     let producer = InMemoryProducer(tx);
-    let message_bus = InMemoryMessageBus {
-        rx: Mutex::new(rx),
-        ack: Default::default(),
-        nack: Default::default(),
-        reject: Default::default(),
-    };
+    let message_bus = InMemoryMessageBus { rx };
 
     (producer, message_bus)
 }
 
 pub struct InMemoryMessageBus {
-    rx: Mutex<Receiver<InMemoryMessage>>,
-    ack: AtomicUsize,
-    nack: AtomicUsize,
-    reject: AtomicUsize,
+    rx: Receiver<InMemoryMessage>,
+}
+
+pub struct InMemoryMessageStream(Receiver<InMemoryMessage>);
+
+impl Stream for InMemoryMessageStream {
+    type Item = Result<InMemoryMessage, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx).map(|m| m.map(Ok))
+    }
 }
 
 #[allow(unused)]
 impl InMemoryMessageBus {
-    pub fn acks(&self) -> usize {
-        self.ack.load(Ordering::Relaxed)
-    }
-
-    pub fn nacks(&self) -> usize {
-        self.nack.load(Ordering::Relaxed)
-    }
-
-    pub fn rejects(&self) -> usize {
-        self.reject.load(Ordering::Relaxed)
-    }
-
     pub fn into_receiver(self) -> Receiver<InMemoryMessage> {
-        self.rx.into_inner()
+        self.rx
     }
 }
 
@@ -58,25 +47,10 @@ impl InMemoryMessageBus {
 impl MessageBus for InMemoryMessageBus {
     type IncomingMessage = InMemoryMessage;
     type Error = Infallible;
+    type Stream = InMemoryMessageStream;
 
-    async fn recv(&self) -> Result<Self::IncomingMessage, Self::Error> {
-        let mut rx = self.rx.lock().await;
-        Ok(rx.recv().await.unwrap())
-    }
-
-    async fn ack(&self, _message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-        self.ack.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    async fn nack(&self, _message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-        self.nack.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    async fn reject(&self, _message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-        self.reject.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+    async fn into_stream(self) -> Result<Self::Stream, Self::Error> {
+        Ok(InMemoryMessageStream(self.rx))
     }
 }
 
@@ -86,7 +60,10 @@ pub struct InMemoryMessage {
     pub headers: RawHeaders,
 }
 
+#[async_trait]
 impl IncomingMessage for InMemoryMessage {
+    type Error = Infallible;
+
     fn headers(&self) -> RawHeaders {
         self.headers.clone()
     }
@@ -95,12 +72,24 @@ impl IncomingMessage for InMemoryMessage {
         &self.payload
     }
 
-    fn key(&self) -> Option<&str> {
-        self.key.as_deref()
+    fn key(&self) -> Option<&[u8]> {
+        self.key.as_ref().map(|k| k.as_bytes())
     }
 
     fn make_span(&self) -> tracing::Span {
         tracing::info_span!("msg receive")
+    }
+
+    async fn ack(&self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn nack(&self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn reject(&self) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 

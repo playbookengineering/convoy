@@ -1,13 +1,17 @@
 use std::{
     fmt::Display,
     mem::{self, ManuallyDrop},
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
     time::Duration,
 };
 
 use async_trait::async_trait;
+use futures_lite::{Stream, StreamExt};
 use rdkafka::{
-    consumer::{CommitMode, Consumer, ConsumerContext, StreamConsumer},
+    consumer::{CommitMode, Consumer, ConsumerContext, MessageStream, StreamConsumer},
+    error::KafkaError,
     message::{BorrowedMessage, Headers, Message as _Message, OwnedHeaders},
     producer::{FutureProducer, FutureRecord},
     ClientContext,
@@ -19,6 +23,52 @@ use crate::{
     producer::Producer,
 };
 
+pub struct RdKafkaMessageStream<C>
+where
+    C: ConsumerContext + 'static,
+{
+    consumer: ManuallyDrop<Arc<StreamConsumer<C>>>,
+    stream: ManuallyDrop<MessageStream<'static>>,
+}
+
+impl<C: ConsumerContext> RdKafkaMessageStream<C> {
+    /// Constructs new `RdKafkaMessageStream`
+    ///
+    /// SAFETY: `stream` must originate from `consumer`
+    unsafe fn new<'a>(consumer: &'a Arc<StreamConsumer<C>>, stream: MessageStream<'a>) -> Self {
+        let consumer = Arc::clone(consumer);
+
+        let stream = mem::transmute::<_, MessageStream<'static>>(stream);
+
+        Self {
+            consumer: ManuallyDrop::new(consumer),
+            stream: ManuallyDrop::new(stream),
+        }
+    }
+}
+
+impl<C: ConsumerContext> Drop for RdKafkaMessageStream<C> {
+    fn drop(&mut self) {
+        // SAFETY: By preserving order (stream first, consumer second)
+        // we guarantee that `message` still points to valid memory
+        // allocated by rdkafka
+        unsafe {
+            ManuallyDrop::drop(&mut self.stream);
+            ManuallyDrop::drop(&mut self.consumer);
+        }
+    }
+}
+
+impl<C: ConsumerContext> Stream for RdKafkaMessageStream<C> {
+    type Item = Result<RdKafkaOwnedMessage<C>, KafkaError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.stream
+            .poll_next(cx)
+            .map_ok(|message| unsafe { RdKafkaOwnedMessage::new(&self.consumer, message) })
+    }
+}
+
 pub struct RdKafkaOwnedMessage<C>
 where
     C: ConsumerContext + 'static,
@@ -28,9 +78,9 @@ where
 }
 
 impl<C: ConsumerContext> RdKafkaOwnedMessage<C> {
-    // Constructs new `RdkafkaOwnedMessage`
-    //
-    // SAFETY: `message` must originate from `consumer`
+    /// Constructs new `RdkafkaOwnedMessage`
+    ///
+    /// SAFETY: `message` must originate from `consumer`
     unsafe fn new<'a>(consumer: &'a Arc<StreamConsumer<C>>, message: BorrowedMessage<'a>) -> Self {
         let consumer = Arc::clone(consumer);
 
@@ -88,36 +138,20 @@ where
 impl<C: ConsumerContext + 'static> MessageBus for KafkaConsumer<C> {
     type IncomingMessage = RdKafkaOwnedMessage<C>;
     type Error = rdkafka::error::KafkaError;
+    type Stream = RdKafkaMessageStream<C>;
 
-    async fn recv(&self) -> Result<Self::IncomingMessage, Self::Error> {
-        let message = self
-            .consumer
-            .recv()
-            .await
-            .map(|m| unsafe { RdKafkaOwnedMessage::<C>::new(&self.consumer, m) })?;
+    async fn into_stream(self) -> Result<Self::Stream, Self::Error> {
+        let stream = self.consumer.stream();
+        let stream = unsafe { RdKafkaMessageStream::new(&self.consumer, stream) };
 
-        tracing::debug!(
-            "Received rdkafka message [payload_len={}]",
-            message.message.payload_len()
-        );
-
-        Ok(message)
-    }
-
-    async fn ack(&self, message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-        message.commit()
-    }
-
-    async fn nack(&self, _: &Self::IncomingMessage) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn reject(&self, message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-        message.commit()
+        Ok(stream)
     }
 }
 
+#[async_trait]
 impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
+    type Error = KafkaError;
+
     fn headers(&self) -> RawHeaders {
         self.message()
             .headers()
@@ -142,8 +176,22 @@ impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
         self.message().payload().unwrap_or_default()
     }
 
-    fn key(&self) -> Option<&str> {
-        self.message.key().and_then(|x| std::str::from_utf8(x).ok())
+    fn key(&self) -> Option<&[u8]> {
+        self.message.key()
+    }
+
+    async fn ack(&self) -> Result<(), Self::Error> {
+        self.consumer
+            .commit_message(&self.message, CommitMode::Async)
+    }
+
+    async fn nack(&self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn reject(&self) -> Result<(), Self::Error> {
+        self.consumer
+            .commit_message(&self.message, CommitMode::Async)
     }
 
     fn make_span(&self) -> tracing::Span {

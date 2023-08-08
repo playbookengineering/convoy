@@ -7,8 +7,14 @@ pub mod utils;
 
 #[cfg(test)]
 pub(crate) mod test {
-    use std::convert::Infallible;
+    use std::{
+        convert::Infallible,
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
+    use async_trait::async_trait;
+    use futures_lite::Stream;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -106,7 +112,10 @@ pub(crate) mod test {
         }
     }
 
+    #[async_trait]
     impl IncomingMessage for TestIncomingMessage {
+        type Error = Infallible;
+
         fn headers(&self) -> RawHeaders {
             self.headers.clone()
         }
@@ -115,8 +124,8 @@ pub(crate) mod test {
             &self.payload
         }
 
-        fn key(&self) -> Option<&str> {
-            self.key.as_deref()
+        fn key(&self) -> Option<&[u8]> {
+            self.key.as_ref().map(|k| k.as_bytes())
         }
 
         fn make_span(&self) -> tracing::Span {
@@ -128,9 +137,34 @@ pub(crate) mod test {
                 messaging.system = "test",
                 messaging.operation = "receive",
                 messaging.message.payload_size_bytes = self.payload.len(),
-                messaging.test.message.key = self.key().unwrap_or_default(),
+                messaging.test.message.key = self
+                    .key()
+                    .and_then(|k| std::str::from_utf8(k).ok())
+                    .unwrap_or_default(),
                 convoy.kind = tracing::field::Empty,
             )
+        }
+
+        async fn ack(&self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn nack(&self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn reject(&self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    pub struct TestMessageBusStream;
+
+    impl Stream for TestMessageBusStream {
+        type Item = Result<TestIncomingMessage, Infallible>;
+
+        fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            unimplemented!("not needed in test scenario")
         }
     }
 
@@ -140,21 +174,10 @@ pub(crate) mod test {
     impl MessageBus for TestMessageBus {
         type IncomingMessage = TestIncomingMessage;
         type Error = Infallible;
+        type Stream = TestMessageBusStream;
 
-        async fn recv(&self) -> Result<Self::IncomingMessage, Self::Error> {
-            unimplemented!("not needed in test scenario")
-        }
-
-        async fn ack(&self, _message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-            Ok(())
-        }
-
-        async fn nack(&self, _message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-            Ok(())
-        }
-
-        async fn reject(&self, _message: &Self::IncomingMessage) -> Result<(), Self::Error> {
-            Ok(())
+        async fn into_stream(self) -> Result<Self::Stream, Self::Error> {
+            Ok(TestMessageBusStream)
         }
     }
 }

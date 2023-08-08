@@ -125,16 +125,20 @@ impl MessageConsumer {
             return Err(MessageConsumerError::SentinelError(abortable));
         }
 
-        let ctx = WorkerContext::new(self, bus);
+        let ctx = WorkerContext::new(self);
 
         let cleanup_timer = config.timer();
         let mut cleanup_tick_stream = TickStream(cleanup_timer);
-        let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx.clone());
+        let mut worker_pool: WorkerPool<B::IncomingMessage> = WorkerPool::new(config, ctx.clone());
+        let mut stream = bus
+            .into_stream()
+            .await
+            .map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
 
         loop {
             tokio::select! {
                 biased;
-                msg = ctx.bus().recv() => {
+                Some(msg) = stream.next() => {
                     let msg = msg.map_err(|err| {
                         tracing::error!("Message bus error: {err}");
                         MessageConsumerError::MessageBusError(err.into())
