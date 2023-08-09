@@ -39,6 +39,7 @@ where
 pub struct RawMessage {
     pub payload: Vec<u8>,
     pub headers: RawHeaders,
+    pub key: Option<Vec<u8>>,
 }
 
 impl RawMessage {

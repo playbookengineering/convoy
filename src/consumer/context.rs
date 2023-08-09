@@ -16,6 +16,7 @@ use thiserror::Error;
 
 pub struct ProcessContext<'a> {
     payload: &'a [u8],
+    key: Option<&'a [u8]>,
     headers: RawHeaders,
     extensions: &'a Extensions,
     cache: &'a mut LocalCache,
@@ -33,12 +34,14 @@ pub enum MessageConvertError {
 impl<'a> ProcessContext<'a> {
     pub fn new(
         payload: &'a [u8],
+        key: Option<&'a [u8]>,
         headers: RawHeaders,
         extensions: &'a Extensions,
         cache: &'a mut LocalCache,
     ) -> Self {
         Self {
             payload,
+            key,
             headers,
             extensions,
             cache,
@@ -63,10 +66,15 @@ impl<'a> ProcessContext<'a> {
         self.payload
     }
 
+    pub fn key(&self) -> Option<&[u8]> {
+        self.key
+    }
+
     pub fn to_owned(&self) -> RawMessage {
         RawMessage {
             payload: self.payload.to_vec(),
             headers: self.headers.clone(),
+            key: self.key.map(|k| k.to_vec()),
         }
     }
 
@@ -78,6 +86,7 @@ impl<'a> ProcessContext<'a> {
         let Self {
             payload,
             headers,
+            key: _,
             extensions: _,
             cache: _,
         } = self;

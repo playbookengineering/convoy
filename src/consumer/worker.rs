@@ -312,6 +312,7 @@ async fn worker<B: IncomingMessage>(
 
         let payload = message.payload();
         let headers = message.headers();
+        let key = message.key();
 
         let span = message.make_span();
         let mut cache = LocalCache::default();
@@ -321,7 +322,8 @@ async fn worker<B: IncomingMessage>(
         }
 
         async {
-            let mut process_context = ProcessContext::new(payload, headers, extensions, &mut cache);
+            let mut process_context =
+                ProcessContext::new(payload, key, headers, extensions, &mut cache);
 
             if let Some(kind) = process_context.kind() {
                 Span::current().record("convoy.kind", kind);
@@ -368,6 +370,7 @@ async fn worker<B: IncomingMessage>(
 
 #[cfg(not(feature = "opentelemetry"))]
 #[allow(unused)]
+#[inline(always)]
 fn extract_otel_context(_: &tracing::Span, _: &crate::message::RawHeaders) {}
 
 #[cfg(feature = "opentelemetry")]

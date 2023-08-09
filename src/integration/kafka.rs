@@ -209,6 +209,7 @@ impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
             messaging.kafka.source.partition = msg.partition(),
             messaging.kafka.message.key = msg.key().and_then(|k| std::str::from_utf8(k).ok()).unwrap_or_default(),
             messaging.kafka.message.offset = msg.offset(),
+            convoy.kind = tracing::field::Empty,
         )
     }
 }
