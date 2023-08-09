@@ -5,6 +5,8 @@ mod otel;
 #[cfg(feature = "opentelemetry")]
 mod schema;
 
+const QUEUE_SIZE: usize = 128;
+
 #[cfg(feature = "opentelemetry")]
 mod otel_test {
     use convoy::{
@@ -21,6 +23,7 @@ mod otel_test {
     use crate::{
         in_memory, otel,
         schema::{Model, ModelContainer},
+        QUEUE_SIZE,
     };
 
     type Prod = MessageProducer<in_memory::InMemoryProducer, Json>;
@@ -75,7 +78,7 @@ mod otel_test {
         let consumer1 = MessageConsumer::default()
             .extension(producer1)
             .message_handler(trace_creator)
-            .listen(WorkerPoolConfig::fixed(3), bus1);
+            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE), bus1);
 
         let (producer2, bus3) = in_memory::make_queue();
         let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
@@ -85,7 +88,7 @@ mod otel_test {
             .extension(producer2)
             .hook(TraceParentSender(trace_tx.clone()))
             .message_handler(trace_consumer)
-            .listen(WorkerPoolConfig::fixed(3), bus2);
+            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE), bus2);
 
         let (producer3, out) = in_memory::make_queue();
         let producer3 = MessageProducer::builder(producer3.clone(), Json).build();
@@ -95,7 +98,7 @@ mod otel_test {
             .extension(producer3)
             .hook(TraceParentSender(trace_tx))
             .message_handler(trace_consumer)
-            .listen(WorkerPoolConfig::fixed(3), bus3);
+            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE), bus3);
 
         let entry = entry.into_sender();
         let mut out = out.into_receiver();

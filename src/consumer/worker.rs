@@ -32,13 +32,14 @@ pub enum WorkerPoolConfig {
 }
 
 impl WorkerPoolConfig {
-    pub fn fixed(count: usize) -> Self {
-        Self::Fixed(FixedPoolConfig { count })
+    pub fn fixed(count: usize, queue_size: usize) -> Self {
+        Self::Fixed(FixedPoolConfig { count, queue_size })
     }
 
-    pub fn key_routed(inactivity_duration: Duration) -> Self {
+    pub fn key_routed(inactivity_duration: Duration, queue_size: usize) -> Self {
         Self::KeyRouted(KeyRoutedPoolConfig {
             inactivity_duration,
+            queue_size,
         })
     }
 
@@ -60,11 +61,13 @@ impl WorkerPoolConfig {
 #[derive(Debug, Clone)]
 pub struct FixedPoolConfig {
     pub count: usize,
+    pub queue_size: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct KeyRoutedPoolConfig {
     pub inactivity_duration: Duration,
+    pub queue_size: usize,
 }
 
 enum Flavour<B: IncomingMessage> {
@@ -108,12 +111,12 @@ impl<B: IncomingMessage> WorkerPool<B> {
     }
 
     fn fixed(config: FixedPoolConfig, context: WorkerContext) -> Self {
-        let FixedPoolConfig { count } = config;
+        let FixedPoolConfig { count, queue_size } = config;
 
         assert!(count > 0, "Count must be greater than zero!");
 
         let workers = (0..count)
-            .map(|idx| launch_worker::<B>(context.clone(), WorkerId(idx.to_string())))
+            .map(|idx| launch_worker::<B>(context.clone(), WorkerId(idx.to_string()), queue_size))
             .collect();
 
         Self {
@@ -187,7 +190,11 @@ pub struct KeyRouted<B: IncomingMessage> {
 
 impl<B: IncomingMessage> KeyRouted<B> {
     fn new(cfg: KeyRoutedPoolConfig, context: WorkerContext) -> Self {
-        let fallback = launch_worker(context.clone(), WorkerId("fallback".to_owned()));
+        let fallback = launch_worker(
+            context.clone(),
+            WorkerId("fallback".to_owned()),
+            cfg.queue_size,
+        );
 
         Self {
             workers: Default::default(),
@@ -205,10 +212,9 @@ impl<B: IncomingMessage> KeyRouted<B> {
                     .map(WorkerId)
                     .unwrap_or_else(|_| WorkerId(hex::encode(key)));
 
-                let worker = self
-                    .workers
-                    .entry(worker_id.clone())
-                    .or_insert_with(|| launch_worker(self.context.clone(), worker_id));
+                let worker = self.workers.entry(worker_id.clone()).or_insert_with(|| {
+                    launch_worker(self.context.clone(), worker_id, self.cfg.queue_size)
+                });
 
                 worker.dispatch(msg).await
             }
@@ -278,8 +284,12 @@ impl<B: IncomingMessage> Debug for WorkerEvent<B> {
     }
 }
 
-fn launch_worker<B: IncomingMessage>(context: WorkerContext, id: WorkerId) -> WorkerState<B> {
-    let (tx, rx) = mpsc::channel(128);
+fn launch_worker<B: IncomingMessage>(
+    context: WorkerContext,
+    id: WorkerId,
+    queue_size: usize,
+) -> WorkerState<B> {
+    let (tx, rx) = mpsc::channel(queue_size);
 
     tokio::spawn(TASK_LOCALS.scope(Default::default(), worker::<B>(context, rx, id)));
 
@@ -427,22 +437,30 @@ mod test {
     }
 
     fn fixed_config_default() -> FixedPoolConfig {
-        FixedPoolConfig { count: 3 }
+        FixedPoolConfig {
+            count: 3,
+            queue_size: 128,
+        }
     }
 
     fn fixed_config(count: usize) -> FixedPoolConfig {
-        FixedPoolConfig { count }
+        FixedPoolConfig {
+            count,
+            queue_size: 128,
+        }
     }
 
     fn kr_config_default() -> KeyRoutedPoolConfig {
         KeyRoutedPoolConfig {
             inactivity_duration: Duration::from_secs(10),
+            queue_size: 128,
         }
     }
 
     fn kr_config(duration: Duration) -> KeyRoutedPoolConfig {
         KeyRoutedPoolConfig {
             inactivity_duration: duration,
+            queue_size: 128,
         }
     }
 

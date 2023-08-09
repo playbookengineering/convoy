@@ -52,6 +52,9 @@ pub enum MessageConsumerError {
 
     #[error("Message bus error: {0}")]
     MessageBusError(Box<dyn Error + Send + Sync>),
+
+    #[error("Message bus EOF")]
+    MessageBusEOF,
 }
 
 #[derive(Default)]
@@ -127,29 +130,24 @@ impl MessageConsumer {
 
         let ctx = WorkerContext::new(self);
 
-        let cleanup_timer = config.timer();
-        let mut cleanup_tick_stream = TickStream(cleanup_timer);
+        //let cleanup_timer = config.timer();
+        //let mut cleanup_tick_stream = TickStream(cleanup_timer);
         let mut worker_pool: WorkerPool<B::IncomingMessage> = WorkerPool::new(config, ctx.clone());
         let mut stream = bus
             .into_stream()
             .await
             .map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
 
-        loop {
-            tokio::select! {
-                biased;
-                Some(msg) = stream.next() => {
-                    let msg = msg.map_err(|err| {
-                        tracing::error!("Message bus error: {err}");
-                        MessageConsumerError::MessageBusError(err.into())
-                    })?;
-                    worker_pool.dispatch(msg).await;
-                }
-                Some(time) = cleanup_tick_stream.next() => {
-                    worker_pool.do_cleanup(time);
-                }
-            }
+        while let Some(msg) = stream.next().await {
+            let msg = msg.map_err(|err| {
+                tracing::error!("Message bus error: {err}");
+                MessageConsumerError::MessageBusError(err.into())
+            })?;
+
+            worker_pool.dispatch(msg).await;
         }
+
+        Err(MessageConsumerError::MessageBusEOF)
     }
 }
 
@@ -236,7 +234,10 @@ mod test {
 
         let _error = consumer
             .listen(
-                WorkerPoolConfig::Fixed(FixedPoolConfig { count: 10 }),
+                WorkerPoolConfig::Fixed(FixedPoolConfig {
+                    count: 10,
+                    queue_size: 128,
+                }),
                 TestMessageBus,
             )
             .await
