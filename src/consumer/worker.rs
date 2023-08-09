@@ -165,15 +165,19 @@ impl<B: IncomingMessage> Fixed<B> {
     }
 
     async fn dispatch(&mut self, msg: B) {
-        let worker_idx = match msg.key() {
-            Some(key) => {
-                tracing::debug!("message key: {key:?}");
-                let hash = self.hasher.hash_one(key) as usize;
-                hash % self.workers.len()
-            }
-            None => {
-                tracing::info!("message does not contain a key, fallback to rand");
-                thread_rng().gen_range(0..self.workers.len())
+        let worker_idx = if let Some(idx) = msg.suggested_worker_id() {
+            idx % self.workers.len()
+        } else {
+            match msg.key() {
+                Some(key) => {
+                    tracing::debug!("message key: {key:?}");
+                    let hash = self.hasher.hash_one(key) as usize;
+                    hash % self.workers.len()
+                }
+                None => {
+                    tracing::info!("message does not contain a key, fallback to rand");
+                    thread_rng().gen_range(0..self.workers.len())
+                }
             }
         };
 

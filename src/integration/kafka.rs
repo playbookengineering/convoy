@@ -194,6 +194,10 @@ impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
             .commit_message(&self.message, CommitMode::Async)
     }
 
+    fn suggested_worker_id(&self) -> Option<usize> {
+        Some(self.message().partition() as usize)
+    }
+
     fn make_span(&self) -> tracing::Span {
         let msg = self.message();
 
