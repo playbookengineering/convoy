@@ -135,7 +135,7 @@ impl<C: ConsumerContext> RdKafkaOwnedMessage<C> {
 
             if let Some(offset) = cq.commit(tp, offset) {
                 let mut tpl = TopicPartitionList::with_capacity(1);
-                tpl.add_partition_offset(topic, partition, rdkafka::Offset::Offset(offset))?;
+                tpl.add_partition_offset(topic, partition, rdkafka::Offset::Offset(offset + 1))?;
                 self.consumer.commit(&tpl, CommitMode::Async)?;
             }
         }
