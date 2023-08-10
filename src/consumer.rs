@@ -130,24 +130,26 @@ impl MessageConsumer {
 
         let ctx = WorkerContext::new(self);
 
-        //let cleanup_timer = config.timer();
-        //let mut cleanup_tick_stream = TickStream(cleanup_timer);
+        let cleanup_timer = config.timer();
+        let mut cleanup_tick_stream = TickStream(cleanup_timer);
         let mut worker_pool: WorkerPool<B::IncomingMessage> = WorkerPool::new(config, ctx.clone());
         let mut stream = bus
             .into_stream()
             .await
             .map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
 
-        while let Some(msg) = stream.next().await {
-            let msg = msg.map_err(|err| {
-                tracing::error!("Message bus error: {err}");
-                MessageConsumerError::MessageBusError(err.into())
-            })?;
-
-            worker_pool.dispatch(msg).await;
+        loop {
+            tokio::select! {
+                biased;
+                msg = stream.next() => {
+                    let msg = msg.ok_or(MessageConsumerError::MessageBusEOF)?.map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
+                    worker_pool.dispatch(msg).await;
+                }
+                Some(tick) = cleanup_tick_stream.next() => {
+                    worker_pool.do_cleanup(tick);
+                }
+            }
         }
-
-        Err(MessageConsumerError::MessageBusEOF)
     }
 }
 

@@ -27,11 +27,6 @@ pub trait IncomingMessage: Send + Sync + 'static {
 
     fn make_span(&self) -> tracing::Span;
 
-    // tmp solution
-    fn suggested_worker_id(&self) -> Option<usize> {
-        None
-    }
-
     /// Acknowledge message and dequeue
     async fn ack(&self) -> Result<(), Self::Error>;
 
