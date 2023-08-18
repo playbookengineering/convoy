@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{instrument, Span};
 
-use crate::utils::InstrumentWithContext;
+use crate::{consumer::Confirmation, utils::InstrumentWithContext};
 
 use super::{
     context::{LocalCache, ProcessContext},
@@ -349,19 +349,14 @@ async fn worker<B: IncomingMessage>(
                 Ok(confirmation) => confirmation,
                 Err(err) => {
                     tracing::error!("Handler error occurred: {err}");
-
-                    if let Err(err) = message.reject().await {
-                        tracing::error!("Failed to store confirmation result: {err}");
-                    }
-
-                    return;
+                    Confirmation::Reject
                 }
             };
 
             let confirmation_store_result = match confirmation {
-                super::Confirmation::Ack => message.ack().await,
-                super::Confirmation::Nack => message.nack().await,
-                super::Confirmation::Reject => message.reject().await,
+                Confirmation::Ack => message.ack().await,
+                Confirmation::Nack => message.nack().await,
+                Confirmation::Reject => message.reject().await,
             };
 
             if let Err(err) = confirmation_store_result {
