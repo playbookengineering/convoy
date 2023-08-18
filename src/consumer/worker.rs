@@ -349,6 +349,11 @@ async fn worker<B: IncomingMessage>(
                 Ok(confirmation) => confirmation,
                 Err(err) => {
                     tracing::error!("Handler error occurred: {err}");
+
+                    if let Err(err) = message.reject().await {
+                        tracing::error!("Failed to store confirmation result: {err}");
+                    }
+
                     return;
                 }
             };
