@@ -9,7 +9,7 @@ use rdkafka::{
 
 use crate::{message::RawHeaders, producer::Producer};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct KafkaProducerOptions {
     topic_override: Option<String>,
     additional_headers: RawHeaders,
