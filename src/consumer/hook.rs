@@ -11,11 +11,11 @@ impl Hooks {
         self
     }
 
-    pub fn before_processing(&self, ctx: &mut ProcessContext) {
+    pub fn before_processing(&self, ctx: &mut ProcessContext<'_>) {
         self.0.iter().for_each(|hook| hook.before_processing(ctx));
     }
 
-    pub fn after_processing(&self, ctx: &ProcessContext, confirmation: Confirmation) {
+    pub fn after_processing(&self, ctx: &ProcessContext<'_>, confirmation: Confirmation) {
         self.0
             .iter()
             .for_each(|hook| hook.after_processing(ctx, confirmation));

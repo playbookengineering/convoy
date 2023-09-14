@@ -18,6 +18,60 @@ pub trait Message: Send + Sync + 'static {
     fn key(&self) -> String;
 }
 
+pub trait InboundMessage: Send + Sync + 'static {
+    const KIND: &'static str;
+
+    type Body: DeserializeOwned;
+    type Headers: TryFromRawHeaders + Send + Sync;
+
+    fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self;
+    fn key(&self) -> String;
+}
+
+pub trait OutboundMessage: Send + Sync + 'static {
+    const KIND: &'static str;
+
+    type Body: Serialize;
+    type Headers: Into<RawHeaders> + Send + Sync;
+
+    fn into_body_and_headers(self) -> (Self::Body, Self::Headers);
+    fn key(&self) -> String;
+}
+
+impl<T> InboundMessage for T
+where
+    T: Message,
+{
+    const KIND: &'static str = T::KIND;
+    type Body = T::Body;
+    type Headers = T::Headers;
+
+    fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self {
+        T::from_body_and_headers(body, headers)
+    }
+
+    fn key(&self) -> String {
+        T::key(self)
+    }
+}
+
+impl<T> OutboundMessage for T
+where
+    T: Message,
+{
+    const KIND: &'static str = T::KIND;
+    type Body = T::Body;
+    type Headers = T::Headers;
+
+    fn into_body_and_headers(self) -> (Self::Body, Self::Headers) {
+        T::into_body_and_headers(self)
+    }
+
+    fn key(&self) -> String {
+        T::key(self)
+    }
+}
+
 pub trait TryFromRawHeaders: Sized {
     type Error: std::error::Error + Send + Sync;
 

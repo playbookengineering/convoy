@@ -6,7 +6,7 @@ use std::{
 use crate::{
     codec::Codec,
     message::{
-        Message, RawHeaders, RawMessage, TryFromRawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER,
+        InboundMessage, RawHeaders, RawMessage, TryFromRawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER,
     },
 };
 
@@ -80,7 +80,7 @@ impl<'a> ProcessContext<'a> {
 
     pub(crate) fn extract_message<M, C>(&self, codec: C) -> Result<M, MessageConvertError>
     where
-        M: Message,
+        M: InboundMessage,
         C: Codec,
     {
         let Self {
@@ -98,7 +98,7 @@ impl<'a> ProcessContext<'a> {
             .decode(payload)
             .map_err(|err| MessageConvertError::Codec(Box::new(err)))?;
 
-        Ok(Message::from_body_and_headers(body, headers))
+        Ok(M::from_body_and_headers(body, headers))
     }
 
     pub(crate) fn extensions(&self) -> &Extensions {

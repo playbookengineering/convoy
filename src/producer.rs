@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::{
     codec::Codec,
-    message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
+    message::{OutboundMessage, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
     utils::InstrumentWithContext,
 };
 
@@ -57,7 +57,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         MessageProducerBuilder::new(producer, codec)
     }
 
-    pub async fn produce<M: Message>(
+    pub async fn produce<M: OutboundMessage>(
         &self,
         message: M,
         options: P::Options,
@@ -69,7 +69,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         result
     }
 
-    async fn produce_impl<M: Message>(
+    async fn produce_impl<M: OutboundMessage>(
         &self,
         message: M,
         options: P::Options,
