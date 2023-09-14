@@ -17,6 +17,7 @@ pub(crate) mod test {
     use futures_lite::Stream;
     use serde::{Deserialize, Serialize};
 
+    use crate::message::FromMessageParts;
     use crate::{
         codec::{Codec, Json},
         consumer::{IncomingMessage, MessageBus},
@@ -59,16 +60,20 @@ pub(crate) mod test {
         type Body = TestMessageBody;
         type Headers = Meta;
 
+        fn key(&self) -> String {
+            self.0.id.clone()
+        }
+    }
+
+    impl FromMessageParts for TestMessage {
         fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self {
             Self(body, headers)
         }
+    }
 
-        fn into_body_and_headers(self) -> (Self::Body, Self::Headers) {
-            (self.0, self.1)
-        }
-
-        fn key(&self) -> String {
-            self.0.id.clone()
+    impl From<TestMessage> for (TestMessageBody, Meta) {
+        fn from(value: TestMessage) -> Self {
+            (value.0, value.1)
         }
     }
 

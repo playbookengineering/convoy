@@ -1,12 +1,13 @@
 use std::{error::Error, pin::Pin};
 
+use serde::de::DeserializeOwned;
 use std::future::Future;
 
 use crate::codec::Json;
 
 use super::context::ProcessContext;
 use super::{Confirmation, Sentinel, TryExtract};
-use crate::message::{Message, RawMessage};
+use crate::message::{FromMessageParts, Message, RawMessage, TryFromRawHeaders};
 
 #[derive(thiserror::Error, Debug)]
 pub enum HandlerError {
@@ -66,7 +67,9 @@ macro_rules! impl_async_message_handler (($($extract:ident),* ) => {
         Func: Fn(M, $($extract),*) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,
         Fut::Output: Into<Confirmation>,
-        M: Message,
+        M: Message + FromMessageParts,
+        M::Body: DeserializeOwned,
+        M::Headers: TryFromRawHeaders,
         $(
             $extract: TryExtract,
         )*
@@ -104,7 +107,9 @@ macro_rules! impl_async_message_handler (($($extract:ident),* ) => {
         Func: Fn(M, $($extract),*) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,
         Fut::Output: Into<Confirmation>,
-        M: Message,
+        M: Message + FromMessageParts,
+        M::Body: DeserializeOwned,
+        M::Headers: TryFromRawHeaders,
         $(
             $extract: TryExtract,
         )*

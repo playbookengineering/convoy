@@ -3,10 +3,12 @@ mod hook;
 use std::{error::Error, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use serde::Serialize;
 
+use crate::message::IntoMessageParts;
 use crate::{
     codec::Codec,
-    message::{OutboundMessage, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
+    message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
     utils::InstrumentWithContext,
 };
 
@@ -57,11 +59,12 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         MessageProducerBuilder::new(producer, codec)
     }
 
-    pub async fn produce<M: OutboundMessage>(
-        &self,
-        message: M,
-        options: P::Options,
-    ) -> Result<(), ProducerError> {
+    pub async fn produce<M>(&self, message: M, options: P::Options) -> Result<(), ProducerError>
+    where
+        M: Message + IntoMessageParts,
+        M::Body: Serialize,
+        M::Headers: Into<RawHeaders>,
+    {
         self.0.hooks.before_send();
 
         let result = self.produce_impl(message, options).await;
@@ -69,11 +72,12 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         result
     }
 
-    async fn produce_impl<M: OutboundMessage>(
-        &self,
-        message: M,
-        options: P::Options,
-    ) -> Result<(), ProducerError> {
+    async fn produce_impl<M>(&self, message: M, options: P::Options) -> Result<(), ProducerError>
+    where
+        M: Message + IntoMessageParts,
+        M::Body: Serialize,
+        M::Headers: Into<RawHeaders>,
+    {
         let this = &self.0;
         let key = message.key();
 
