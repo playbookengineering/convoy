@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -12,6 +13,7 @@ use crate::{
 
 use super::Extensions;
 
+use crate::message::FromMessageParts;
 use thiserror::Error;
 
 pub struct ProcessContext<'a> {
@@ -80,7 +82,9 @@ impl<'a> ProcessContext<'a> {
 
     pub(crate) fn extract_message<M, C>(&self, codec: C) -> Result<M, MessageConvertError>
     where
-        M: Message,
+        M: Message + FromMessageParts,
+        M::Body: DeserializeOwned,
+        M::Headers: TryFromRawHeaders,
         C: Codec,
     {
         let Self {
@@ -98,7 +102,7 @@ impl<'a> ProcessContext<'a> {
             .decode(payload)
             .map_err(|err| MessageConvertError::Codec(Box::new(err)))?;
 
-        Ok(Message::from_body_and_headers(body, headers))
+        Ok(FromMessageParts::from_body_and_headers(body, headers))
     }
 
     pub(crate) fn extensions(&self) -> &Extensions {

@@ -42,16 +42,20 @@ impl Message for ModelContainer {
 
     type Headers = Headers;
 
-    fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self {
-        Self(body, headers)
-    }
-
-    fn into_body_and_headers(self) -> (Self::Body, Self::Headers) {
-        (self.0, self.1)
-    }
-
     fn key(&self) -> String {
         self.0.id.clone()
+    }
+}
+
+impl From<(Model, Headers)> for ModelContainer {
+    fn from((body, headers): (Model, Headers)) -> Self {
+        Self(body, headers)
+    }
+}
+
+impl Into<(Model, Headers)> for ModelContainer {
+    fn into(self) -> (Model, Headers) {
+        (self.0, self.1)
     }
 }
 

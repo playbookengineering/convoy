@@ -10,12 +10,52 @@ pub const KIND_HEADER: &str = "x-convoy-kind";
 pub trait Message: Send + Sync + 'static {
     const KIND: &'static str;
 
-    type Body: Serialize + DeserializeOwned;
-    type Headers: TryFromRawHeaders + Into<RawHeaders> + Send + Sync;
+    type Body;
+    type Headers: Send + Sync;
 
-    fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self;
-    fn into_body_and_headers(self) -> (Self::Body, Self::Headers);
     fn key(&self) -> String;
+}
+
+pub trait FromMessageParts
+where
+    Self: Message,
+    Self::Body: DeserializeOwned,
+    Self::Headers: TryFromRawHeaders,
+{
+    fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self;
+}
+
+impl<T> FromMessageParts for T
+where
+    Self: Message,
+    Self::Body: DeserializeOwned,
+    Self::Headers: TryFromRawHeaders,
+    T: From<(Self::Body, Self::Headers)>,
+{
+    fn from_body_and_headers(body: Self::Body, headers: Self::Headers) -> Self {
+        T::from((body, headers))
+    }
+}
+
+pub trait IntoMessageParts
+where
+    Self: Message,
+    Self::Body: Serialize,
+    Self::Headers: Into<RawHeaders>,
+{
+    fn into_body_and_headers(self) -> (Self::Body, Self::Headers);
+}
+
+impl<T> IntoMessageParts for T
+where
+    Self: Message,
+    Self::Body: Serialize,
+    Self::Headers: Into<RawHeaders>,
+    T: Into<(Self::Body, Self::Headers)>,
+{
+    fn into_body_and_headers(self) -> (Self::Body, Self::Headers) {
+        T::into(self)
+    }
 }
 
 pub trait TryFromRawHeaders: Sized {
