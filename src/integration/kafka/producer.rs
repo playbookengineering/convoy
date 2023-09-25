@@ -3,7 +3,7 @@ use std::{fmt::Display, time::Duration};
 use async_trait::async_trait;
 use rdkafka::{
     message::OwnedHeaders,
-    producer::{FutureProducer, FutureRecord},
+    producer::{DefaultProducerContext, FutureProducer, FutureRecord},
     ClientContext,
 };
 
@@ -34,7 +34,10 @@ impl KafkaProducerOptions {
 }
 
 #[derive(Clone)]
-pub struct KafkaProducer<C: ClientContext + 'static> {
+pub struct KafkaProducer<C = DefaultProducerContext>
+where
+    C: ClientContext + 'static,
+{
     producer: FutureProducer<C>,
     topic: String,
 }

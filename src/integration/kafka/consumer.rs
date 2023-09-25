@@ -11,7 +11,10 @@ use std::{
 use async_trait::async_trait;
 use futures_lite::{Stream, StreamExt};
 use rdkafka::{
-    consumer::{CommitMode, Consumer, ConsumerContext, MessageStream, StreamConsumer},
+    consumer::{
+        CommitMode, Consumer, ConsumerContext, DefaultConsumerContext, MessageStream,
+        StreamConsumer,
+    },
     error::KafkaError,
     message::{BorrowedMessage, Headers, Message as _Message},
     TopicPartitionList,
@@ -156,7 +159,7 @@ impl<C: ConsumerContext> Drop for RdKafkaOwnedMessage<C> {
     }
 }
 
-pub struct KafkaConsumer<C>
+pub struct KafkaConsumer<C = DefaultConsumerContext>
 where
     C: ConsumerContext + 'static,
 {
