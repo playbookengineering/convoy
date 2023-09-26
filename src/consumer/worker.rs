@@ -6,9 +6,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tracing::{instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
-use crate::{consumer::Confirmation, utils::InstrumentWithContext};
+use crate::consumer::Confirmation;
 
 use super::{
     context::{LocalCache, ProcessContext},
@@ -373,7 +373,7 @@ async fn worker<B: IncomingMessage>(
                 confirmation,
             );
         }
-        .instrument_cx(span)
+        .instrument(span)
         .await
     }
 }

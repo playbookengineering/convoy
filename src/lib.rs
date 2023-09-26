@@ -3,7 +3,6 @@ pub mod consumer;
 pub mod integration;
 pub mod message;
 pub mod producer;
-pub mod utils;
 
 #[cfg(test)]
 pub(crate) mod test {

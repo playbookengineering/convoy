@@ -5,26 +5,25 @@ mod otel;
 #[cfg(feature = "opentelemetry")]
 mod schema;
 
-const QUEUE_SIZE: usize = 128;
-
 #[cfg(feature = "opentelemetry")]
 mod otel_test {
     use convoy::{
         codec::Json,
         consumer::{Extension, Hook, MessageConsumer, ProcessContext, WorkerPoolConfig},
         producer::MessageProducer,
-        utils::InstrumentWithContext,
     };
     use fake::{Fake, Faker};
     use opentelemetry::{baggage::BaggageExt, Context, Key};
     use tokio::sync::mpsc::{self, UnboundedSender};
+    use tracing::Instrument;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     use crate::{
         in_memory, otel,
         schema::{Model, ModelContainer},
-        QUEUE_SIZE,
     };
+
+    const QUEUE_SIZE: usize = 128;
 
     type Prod = MessageProducer<in_memory::InMemoryProducer, Json>;
 
@@ -51,7 +50,7 @@ mod otel_test {
 
             tracing::info!("produced message");
         }
-        .instrument_cx(span)
+        .instrument(span)
         .await
     }
 

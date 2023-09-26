@@ -3,11 +3,11 @@ mod hook;
 use std::{error::Error, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use tracing::Instrument;
 
 use crate::{
     codec::Codec,
     message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
-    utils::InstrumentWithContext,
 };
 
 use self::hook::Hooks;
@@ -97,7 +97,7 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
 
         this.producer
             .send(key, headers, payload, options)
-            .instrument_cx(span)
+            .instrument(span)
             .await
             .map_err(|err| ProducerError::SendError(err.into()))
     }
