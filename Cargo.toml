@@ -34,6 +34,5 @@ tracing-opentelemetry = { version = "0.19", optional = true }
 
 [dev-dependencies]
 fake = { version = "2", features = ["derive"] }
-opentelemetry-otlp = "0.12"
 opentelemetry = { version = "0.19", features = ["rt-tokio", "trace"] }
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }

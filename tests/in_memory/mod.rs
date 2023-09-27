@@ -13,6 +13,9 @@ use convoy::{
 use futures_lite::Stream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
+pub const PRODUCE_SPAN_NAME: &str = "msg_produce";
+pub const RECEIVE_SPAN_NAME: &str = "msg_receive";
+
 pub fn make_queue() -> (InMemoryProducer, InMemoryMessageBus) {
     let (tx, rx) = channel(16);
 
@@ -77,7 +80,7 @@ impl IncomingMessage for InMemoryMessage {
     }
 
     fn make_span(&self) -> tracing::Span {
-        tracing::info_span!("msg receive")
+        tracing::info_span!(RECEIVE_SPAN_NAME, convoy.kind = tracing::field::Empty)
     }
 
     async fn ack(&self) -> Result<(), Self::Error> {
@@ -133,6 +136,6 @@ impl Producer for InMemoryProducer {
         _payload: &[u8],
         _options: &Self::Options,
     ) -> tracing::Span {
-        tracing::info_span!("msg produce")
+        tracing::info_span!(PRODUCE_SPAN_NAME, convoy.kind = tracing::field::Empty)
     }
 }
