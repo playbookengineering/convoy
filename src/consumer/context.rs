@@ -10,16 +10,17 @@ use crate::{
     },
 };
 
-use super::Extensions;
+use super::{Extensions, MessageBus};
 
 use thiserror::Error;
 
-pub struct ProcessContext<'a> {
+pub struct ProcessContext<'a, B: MessageBus> {
     payload: &'a [u8],
     key: Option<&'a [u8]>,
     headers: RawHeaders,
     extensions: &'a Extensions,
     cache: &'a mut LocalCache,
+    raw_msg: &'a B::IncomingMessage,
 }
 
 #[derive(Debug, Error)]
@@ -31,13 +32,14 @@ pub enum MessageConvertError {
     Headers(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl<'a> ProcessContext<'a> {
+impl<'a, B: MessageBus> ProcessContext<'a, B> {
     pub fn new(
         payload: &'a [u8],
         key: Option<&'a [u8]>,
         headers: RawHeaders,
         extensions: &'a Extensions,
         cache: &'a mut LocalCache,
+        raw_msg: &'a B::IncomingMessage,
     ) -> Self {
         Self {
             payload,
@@ -45,6 +47,7 @@ impl<'a> ProcessContext<'a> {
             headers,
             extensions,
             cache,
+            raw_msg,
         }
     }
 
@@ -70,6 +73,10 @@ impl<'a> ProcessContext<'a> {
         self.key
     }
 
+    pub fn raw_message(&self) -> &B::IncomingMessage {
+        self.raw_msg
+    }
+
     pub fn to_owned(&self) -> RawMessage {
         RawMessage {
             payload: self.payload.to_vec(),
@@ -89,6 +96,7 @@ impl<'a> ProcessContext<'a> {
             key: _,
             extensions: _,
             cache: _,
+            raw_msg: _,
         } = self;
 
         let headers: M::Headers = TryFromRawHeaders::try_from_raw_headers(headers.clone())

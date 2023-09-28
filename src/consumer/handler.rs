@@ -5,6 +5,7 @@ use std::future::Future;
 use crate::codec::Json;
 
 use super::context::ProcessContext;
+use super::MessageBus;
 use super::{Confirmation, Sentinel, TryExtract};
 use crate::message::{Message, RawMessage};
 
@@ -17,29 +18,30 @@ pub enum HandlerError {
     DecodeError(Box<dyn Error + Send + Sync>),
 }
 
-pub trait Handler<Args>: Send + Sync + 'static {
+pub trait Handler<Bus: MessageBus, Args>: Send + Sync + 'static {
     type Future: Future<Output = Confirmation> + Send;
 
-    fn call(&self, msg: &ProcessContext<'_>) -> Result<Self::Future, HandlerError>;
+    fn call(&self, msg: &ProcessContext<'_, Bus>) -> Result<Self::Future, HandlerError>;
 
-    fn sentinels(&self) -> Vec<Box<dyn Sentinel>>;
+    fn sentinels(&self) -> Vec<Box<dyn Sentinel<Bus>>>;
 }
 
-pub trait RoutableHandler<Args>: Handler<Args> {
+pub trait RoutableHandler<Bus: MessageBus, Args>: Handler<Bus, Args> {
     fn kind(&self) -> &'static str;
 }
 
-pub type BoxedHandler<Args> =
-    Box<dyn Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>>;
+pub type BoxedHandler<Bus, Args> =
+    Box<dyn Handler<Bus, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>>;
 
-pub(crate) struct ErasedHandler<Args: Send + Sync + 'static> {
-    handler: BoxedHandler<Args>,
+pub(crate) struct ErasedHandler<Bus: Send + Sync + 'static, Args: Send + Sync + 'static> {
+    handler: BoxedHandler<Bus, Args>,
 }
 
-impl<Args: Send + Sync + 'static> ErasedHandler<Args> {
+impl<Bus: MessageBus, Args: Send + Sync + 'static> ErasedHandler<Bus, Args> {
     pub(crate) fn new<Func>(handler: Func) -> Self
     where
-        Func: Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
+        Func: Handler<Bus, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+            + 'static,
     {
         Self {
             handler: Box::new(handler),
@@ -47,33 +49,34 @@ impl<Args: Send + Sync + 'static> ErasedHandler<Args> {
     }
 }
 
-impl<Args: Send + Sync + 'static, A> Handler<A> for ErasedHandler<Args> {
+impl<Bus: MessageBus, Args: Send + Sync + 'static, A> Handler<Bus, A> for ErasedHandler<Bus, Args> {
     type Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>;
 
-    fn call(&self, msg: &ProcessContext<'_>) -> Result<Self::Future, HandlerError> {
+    fn call(&self, msg: &ProcessContext<'_, Bus>) -> Result<Self::Future, HandlerError> {
         self.handler.call(msg)
     }
 
-    fn sentinels(&self) -> Vec<Box<dyn Sentinel>> {
+    fn sentinels(&self) -> Vec<Box<dyn Sentinel<Bus>>> {
         self.handler.sentinels()
     }
 }
 
 macro_rules! impl_async_message_handler (($($extract:ident),* ) => {
     #[allow(non_snake_case)]
-    impl<Func, Fut, M, $($extract,)*> Handler<(M, $($extract,)*)> for Func
+    impl<Bus, Func, Fut, M, $($extract,)*> Handler<Bus, (M, $($extract,)*)> for Func
     where
+        Bus: MessageBus,
         Func: Fn(M, $($extract),*) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,
         Fut::Output: Into<Confirmation>,
         M: Message,
         $(
-            $extract: TryExtract,
+            $extract: TryExtract<Bus>,
         )*
     {
         type Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>;
 
-        fn call(&self, msg: &ProcessContext<'_>) -> Result<Self::Future, HandlerError> {
+        fn call(&self, msg: &ProcessContext<'_, Bus>) -> Result<Self::Future, HandlerError> {
             $(
                 let $extract = $extract::try_extract(msg).map_err(|err| HandlerError::ExtractError(Box::new(err)))?;
             )*
@@ -86,27 +89,28 @@ macro_rules! impl_async_message_handler (($($extract:ident),* ) => {
             }))
         }
 
-        #[allow(unused)]
-        fn sentinels(&self) -> Vec<Box<dyn Sentinel>> {
-            let mut sentinels = vec![];
+       #[allow(unused)]
+       fn sentinels(&self) -> Vec<Box<dyn Sentinel<Bus>>> {
+          let mut sentinels = vec![];
 
-            $(
-                sentinels.extend($extract::sentinel());
-            )*
+          $(
+               sentinels.extend($extract::sentinel());
+          )*
 
-            sentinels
+          sentinels
         }
     }
 
     #[allow(non_snake_case)]
-    impl<Func, Fut, M, $($extract,)*> RoutableHandler<(M, $($extract,)*)> for Func
+    impl<Bus, Func, Fut, M, $($extract,)*> RoutableHandler<Bus, (M, $($extract,)*)> for Func
     where
+        Bus: MessageBus,
         Func: Fn(M, $($extract),*) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,
         Fut::Output: Into<Confirmation>,
         M: Message,
         $(
-            $extract: TryExtract,
+            $extract: TryExtract<Bus>,
         )*
     {
         fn kind(&self) -> &'static str {
@@ -127,18 +131,19 @@ impl_async_message_handler! {A, B, C, D, E, F, G, H}
 
 macro_rules! impl_async_fallback_handler (($($extract:ident),* ) => {
     #[allow(non_snake_case)]
-    impl<Func, Fut, $($extract,)*> Handler<(RawMessage, $($extract,)*)> for Func
+    impl<Bus, Func, Fut, $($extract,)*> Handler<Bus, (RawMessage, $($extract,)*)> for Func
     where
+        Bus: MessageBus,
         Func: Fn(RawMessage, $($extract),*) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,
         Fut::Output: Into<Confirmation>,
         $(
-            $extract: TryExtract,
+            $extract: TryExtract<Bus>,
         )*
     {
         type Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>;
 
-        fn call(&self, msg: &ProcessContext<'_>) -> Result<Self::Future, HandlerError> {
+        fn call(&self, msg: &ProcessContext<'_, Bus>) -> Result<Self::Future, HandlerError> {
             $(
                 let $extract = $extract::try_extract(msg).map_err(|err| HandlerError::ExtractError(Box::new(err)))?;
             )*
@@ -151,7 +156,7 @@ macro_rules! impl_async_fallback_handler (($($extract:ident),* ) => {
         }
 
         #[allow(unused)]
-        fn sentinels(&self) -> Vec<Box<dyn Sentinel>> {
+        fn sentinels(&self) -> Vec<Box<dyn Sentinel<Bus>>> {
             let mut sentinels = vec![];
 
             $(

@@ -46,9 +46,9 @@ use thiserror::Error;
 use tokio::time::Interval;
 
 #[derive(Debug, Error)]
-pub enum MessageConsumerError {
+pub enum MessageConsumerError<B> {
     #[error("Failed sentinels: {0:?}")]
-    SentinelError(Vec<Box<dyn Sentinel>>),
+    SentinelError(Vec<Box<dyn Sentinel<B>>>),
 
     #[error("Message bus error: {0}")]
     MessageBusError(Box<dyn Error + Send + Sync>),
@@ -57,18 +57,27 @@ pub enum MessageConsumerError {
     MessageBusEOF,
 }
 
-#[derive(Default)]
-pub struct MessageConsumer {
-    router: Router,
+pub struct MessageConsumer<B: MessageBus> {
+    router: Router<B>,
     extensions: Extensions,
-    hooks: Hooks,
+    hooks: Hooks<B>,
+    bus: B,
 }
 
-impl MessageConsumer {
+impl<B: MessageBus> MessageConsumer<B> {
+    pub fn new(bus: B) -> Self {
+        Self {
+            router: Router::default(),
+            extensions: Extensions::default(),
+            hooks: Hooks::default(),
+            bus,
+        }
+    }
+
     pub fn message_handler<Fun, Args>(self, handler: Fun) -> Self
     where
-        Fun: RoutableHandler<Args>
-            + Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+        Fun: RoutableHandler<B, Args>
+            + Handler<B, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
             + 'static,
         Args: Send + Sync + 'static,
     {
@@ -80,7 +89,8 @@ impl MessageConsumer {
 
     pub fn fallback_handler<Fun, Args>(self, handler: Fun) -> Self
     where
-        Fun: Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
+        Fun:
+            Handler<B, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
         Args: Send + Sync + 'static,
     {
         Self {
@@ -101,7 +111,7 @@ impl MessageConsumer {
 
     pub fn hook<T>(self, hook: T) -> Self
     where
-        T: Hook,
+        T: Hook<B>,
     {
         Self {
             hooks: self.hooks.push(hook),
@@ -109,11 +119,10 @@ impl MessageConsumer {
         }
     }
 
-    pub async fn listen<B: MessageBus>(
+    pub async fn listen(
         mut self,
         config: WorkerPoolConfig,
-        bus: B,
-    ) -> Result<Infallible, MessageConsumerError> {
+    ) -> Result<Infallible, MessageConsumerError<B>> {
         let sentinels = mem::take(&mut self.router.sentinels);
 
         let mut abortable = sentinels
@@ -128,11 +137,18 @@ impl MessageConsumer {
             return Err(MessageConsumerError::SentinelError(abortable));
         }
 
-        let ctx = WorkerContext::new(self);
+        let Self {
+            router,
+            extensions,
+            hooks,
+            bus,
+        } = self;
+
+        let ctx = WorkerContext::new(router, extensions, hooks);
 
         let cleanup_timer = config.timer();
         let mut cleanup_tick_stream = TickStream(cleanup_timer);
-        let mut worker_pool: WorkerPool<B::IncomingMessage> = WorkerPool::new(config, ctx.clone());
+        let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx);
         let mut stream = bus
             .into_stream()
             .await
@@ -230,18 +246,15 @@ mod test {
         ) {
         }
 
-        let consumer = MessageConsumer::default()
+        let consumer = MessageConsumer::new(TestMessageBus)
             .message_handler(message_handler_missing_states)
             .fallback_handler(fallback_handler_missing_states);
 
         let _error = consumer
-            .listen(
-                WorkerPoolConfig::Fixed(FixedPoolConfig {
-                    count: 10,
-                    queue_size: 128,
-                }),
-                TestMessageBus,
-            )
+            .listen(WorkerPoolConfig::Fixed(FixedPoolConfig {
+                count: 10,
+                queue_size: 128,
+            }))
             .await
             .unwrap_err();
     }

@@ -1,49 +1,54 @@
 use std::sync::Arc;
 
-use super::{context::ProcessContext, Confirmation};
+use super::{context::ProcessContext, Confirmation, MessageBus};
 
-#[derive(Default)]
-pub struct Hooks(Vec<Box<dyn Hook>>);
+pub struct Hooks<B: MessageBus>(Vec<Box<dyn Hook<B>>>);
 
-impl Hooks {
-    pub fn push<H: Hook>(mut self, hook: H) -> Self {
+impl<B: MessageBus> Default for Hooks<B> {
+    fn default() -> Self {
+        Self(Vec::default())
+    }
+}
+
+impl<B: MessageBus> Hooks<B> {
+    pub fn push<H: Hook<B>>(mut self, hook: H) -> Self {
         self.0.push(Box::new(hook));
         self
     }
 
-    pub fn before_processing(&self, ctx: &mut ProcessContext) {
+    pub fn before_processing(&self, ctx: &mut ProcessContext<'_, B>) {
         self.0.iter().for_each(|hook| hook.before_processing(ctx));
     }
 
-    pub fn after_processing(&self, ctx: &ProcessContext, confirmation: Confirmation) {
+    pub fn after_processing(&self, ctx: &ProcessContext<'_, B>, confirmation: Confirmation) {
         self.0
             .iter()
             .for_each(|hook| hook.after_processing(ctx, confirmation));
     }
 }
 
-pub trait Hook: Send + Sync + 'static {
-    fn before_processing(&self, _ctx: &mut ProcessContext<'_>) {}
+pub trait Hook<B: MessageBus>: Send + Sync + 'static {
+    fn before_processing(&self, _ctx: &mut ProcessContext<'_, B>) {}
 
-    fn after_processing(&self, _ctx: &ProcessContext<'_>, _: Confirmation) {}
+    fn after_processing(&self, _ctx: &ProcessContext<'_, B>, _: Confirmation) {}
 }
 
-impl<T: Hook> Hook for Box<T> {
-    fn before_processing(&self, ctx: &mut ProcessContext<'_>) {
+impl<T: Hook<B>, B: MessageBus> Hook<B> for Box<T> {
+    fn before_processing(&self, ctx: &mut ProcessContext<'_, B>) {
         (**self).before_processing(ctx)
     }
 
-    fn after_processing(&self, ctx: &ProcessContext<'_>, confirmation: Confirmation) {
+    fn after_processing(&self, ctx: &ProcessContext<'_, B>, confirmation: Confirmation) {
         (**self).after_processing(ctx, confirmation)
     }
 }
 
-impl<T: Hook> Hook for Arc<T> {
-    fn before_processing(&self, ctx: &mut ProcessContext<'_>) {
+impl<T: Hook<B>, B: MessageBus> Hook<B> for Arc<T> {
+    fn before_processing(&self, ctx: &mut ProcessContext<'_, B>) {
         (**self).before_processing(ctx)
     }
 
-    fn after_processing(&self, ctx: &ProcessContext<'_>, confirmation: Confirmation) {
+    fn after_processing(&self, ctx: &ProcessContext<'_, B>, confirmation: Confirmation) {
         (**self).after_processing(ctx, confirmation)
     }
 }

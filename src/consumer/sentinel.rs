@@ -1,8 +1,8 @@
-use super::MessageConsumer;
+use super::{MessageBus, MessageConsumer};
 
 use std::fmt::Debug;
 
-pub trait Sentinel: Debug + Send + Sync + 'static {
-    fn abort(&self, consumer: &MessageConsumer) -> bool;
+pub trait Sentinel<B: MessageBus>: Debug + Send + Sync + 'static {
+    fn abort(&self, consumer: &MessageConsumer<B>) -> bool;
     fn cause(&self) -> String;
 }

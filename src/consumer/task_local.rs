@@ -6,7 +6,7 @@ use std::{
     marker::PhantomData,
 };
 
-use super::{context::ProcessContext, TryExtract};
+use super::{context::ProcessContext, MessageBus, TryExtract};
 
 tokio::task_local! {
     pub(crate) static TASK_LOCALS: TaskLocals;
@@ -54,10 +54,10 @@ impl<T: Default + Copy + Send + 'static> TaskLocal<T> {
     }
 }
 
-impl<T: Default + Send + Sync + Sized + 'static> TryExtract for TaskLocal<T> {
+impl<B: MessageBus, T: Default + Send + Sync + Sized + 'static> TryExtract<B> for TaskLocal<T> {
     type Error = Infallible;
 
-    fn try_extract(_: &ProcessContext<'_>) -> Result<Self, Self::Error> {
+    fn try_extract(_: &ProcessContext<'_, B>) -> Result<Self, Self::Error> {
         Ok(TaskLocal(PhantomData))
     }
 }

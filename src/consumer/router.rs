@@ -6,16 +6,16 @@ use super::{
     context::ProcessContext,
     handler::{BoxedHandler, ErasedHandler, Handler, HandlerError, RoutableHandler},
     sentinel::Sentinel,
-    Confirmation,
+    Confirmation, MessageBus,
 };
 
-pub struct Router {
-    handlers: HashMap<&'static str, BoxedHandler<()>>,
-    fallback_handler: BoxedHandler<()>,
-    pub(crate) sentinels: Vec<Box<dyn Sentinel>>,
+pub struct Router<B: MessageBus> {
+    handlers: HashMap<&'static str, BoxedHandler<B, ()>>,
+    fallback_handler: BoxedHandler<B, ()>,
+    pub(crate) sentinels: Vec<Box<dyn Sentinel<B>>>,
 }
 
-impl Default for Router {
+impl<B: MessageBus> Default for Router<B> {
     fn default() -> Self {
         Self {
             handlers: Default::default(),
@@ -32,11 +32,11 @@ impl Default for Router {
     }
 }
 
-impl Router {
+impl<Bus: MessageBus> Router<Bus> {
     pub fn message_handler<Fun, Args>(mut self, handler: Fun) -> Self
     where
-        Fun: RoutableHandler<Args>
-            + Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+        Fun: RoutableHandler<Bus, Args>
+            + Handler<Bus, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
             + 'static,
         Args: Send + Sync + 'static,
     {
@@ -49,7 +49,8 @@ impl Router {
 
     pub fn fallback_handler<Fun, Args>(mut self, handler: Fun) -> Self
     where
-        Fun: Handler<Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
+        Fun: Handler<Bus, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+            + 'static,
         Args: Send + Sync + 'static,
     {
         self.sentinels.extend(handler.sentinels());
@@ -57,7 +58,7 @@ impl Router {
         self
     }
 
-    pub async fn route(&self, ctx: &ProcessContext<'_>) -> Result<Confirmation, HandlerError> {
+    pub async fn route(&self, ctx: &ProcessContext<'_, Bus>) -> Result<Confirmation, HandlerError> {
         let handler = ctx
             .kind()
             .and_then(|kind| self.handlers.get(kind))
@@ -69,7 +70,10 @@ impl Router {
 
 #[cfg(test)]
 mod test {
-    use crate::{consumer::extension::Extension, test::TestMessage};
+    use crate::{
+        consumer::extension::Extension,
+        test::{TestMessage, TestMessageBus},
+    };
 
     use super::*;
 
@@ -94,7 +98,7 @@ mod test {
 
         async fn handler_with_ext(_msg: TestMessage, _: Extension<i32>) {}
 
-        let _ = Router::default()
+        let _ = Router::<TestMessageBus>::default()
             .message_handler(handler)
             .message_handler(handler_with_ext)
             .message_handler(|message: TestMessage| async move {
@@ -123,7 +127,7 @@ mod test {
         async fn default_handler(_: RawMessage) {}
         async fn default_handler_with_ext(_: RawMessage, _: Extension<i32>) {}
 
-        let _ = Router::default()
+        let _ = Router::<TestMessageBus>::default()
             .fallback_handler(default_handler)
             .fallback_handler(default_handler_with_ext)
             .fallback_handler(|message: RawMessage| async move {

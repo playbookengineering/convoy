@@ -90,19 +90,19 @@ mod otel_test {
         let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
         // [ bus2 -> producer2 ]
-        let consumer2 = MessageConsumer::default()
+        let consumer2 = MessageConsumer::new(bus2)
             .extension(producer2)
             .message_handler(trace_consumer)
-            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE), bus2);
+            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE));
 
         let (producer3, out) = in_memory::make_queue();
         let producer3 = MessageProducer::builder(producer3.clone(), Json).build();
 
         // [ bus3 -> producer3 ]
-        let consumer3 = MessageConsumer::default()
+        let consumer3 = MessageConsumer::new(bus3)
             .extension(producer3)
             .message_handler(trace_consumer)
-            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE), bus3);
+            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE));
 
         let entry = entry.into_sender();
         let mut out = out.into_receiver();
