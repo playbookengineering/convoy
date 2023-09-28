@@ -12,8 +12,6 @@ use crate::{in_memory::InMemoryProducer, schema::Model};
 mod in_memory;
 mod schema;
 
-const QUEUE_SIZE: usize = 128;
-
 async fn proxy<P: Producer, C: Codec>(
     message: ModelContainer,
     dst: Extension<MessageProducer<P, C>>,
@@ -39,7 +37,7 @@ async fn message_is_passed_through_pipeline() {
     let consumer1 = MessageConsumer::new(bus1)
         .extension(producer1)
         .message_handler(proxy::<InMemoryProducer, Json>)
-        .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE));
+        .listen(WorkerPoolConfig::fixed(3));
 
     let (producer2, out) = in_memory::make_queue();
 
@@ -49,7 +47,7 @@ async fn message_is_passed_through_pipeline() {
     let consumer2 = MessageConsumer::new(bus2)
         .extension(producer2)
         .message_handler(proxy::<InMemoryProducer, Json>)
-        .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE));
+        .listen(WorkerPoolConfig::fixed(3));
 
     let entry = entry.into_sender();
     let mut out = out.into_receiver();

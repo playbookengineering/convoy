@@ -45,8 +45,8 @@ pub enum WorkerPoolConfig {
 }
 
 impl WorkerPoolConfig {
-    pub fn fixed(count: usize, queue_size: usize) -> Self {
-        Self::Fixed(FixedPoolConfig { count, queue_size })
+    pub fn fixed(count: usize) -> Self {
+        Self::Fixed(FixedPoolConfig::new(count))
     }
 
     pub fn key_routed(inactivity_duration: Duration, queue_size: usize) -> Self {
@@ -56,7 +56,7 @@ impl WorkerPoolConfig {
         })
     }
 
-    pub fn timer(&self) -> Option<tokio::time::Interval> {
+    pub(crate) fn timer(&self) -> Option<tokio::time::Interval> {
         match self {
             WorkerPoolConfig::Fixed(_) => None,
             WorkerPoolConfig::KeyRouted(kr_config) => {
@@ -75,6 +75,24 @@ impl WorkerPoolConfig {
 pub struct FixedPoolConfig {
     pub count: usize,
     pub queue_size: usize,
+}
+
+impl FixedPoolConfig {
+    const DEFAULT_QUEUE_SIZE: usize = 128;
+
+    pub fn new(workers_count: usize) -> Self {
+        Self {
+            count: workers_count,
+            queue_size: Self::DEFAULT_QUEUE_SIZE,
+        }
+    }
+
+    pub fn queue_size(self, size: usize) -> Self {
+        Self {
+            queue_size: size,
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

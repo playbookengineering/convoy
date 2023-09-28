@@ -46,9 +46,9 @@ use thiserror::Error;
 use tokio::time::Interval;
 
 #[derive(Debug, Error)]
-pub enum MessageConsumerError<B> {
+pub enum MessageConsumerError {
     #[error("Failed sentinels: {0:?}")]
-    SentinelError(Vec<Box<dyn Sentinel<B>>>),
+    SentinelError(Vec<String>),
 
     #[error("Message bus error: {0}")]
     MessageBusError(Box<dyn Error + Send + Sync>),
@@ -122,17 +122,17 @@ impl<B: MessageBus> MessageConsumer<B> {
     pub async fn listen(
         mut self,
         config: WorkerPoolConfig,
-    ) -> Result<Infallible, MessageConsumerError<B>> {
+    ) -> Result<Infallible, MessageConsumerError> {
         let sentinels = mem::take(&mut self.router.sentinels);
 
         let mut abortable = sentinels
             .into_iter()
-            .filter(|x| x.abort(&self))
+            .filter_map(|x| x.abort(&self).then(|| x.cause()))
             .collect::<Vec<_>>();
 
         if !abortable.is_empty() {
-            abortable.sort_by_key(|s| s.cause());
-            abortable.dedup_by_key(|s| s.cause());
+            abortable.sort();
+            abortable.dedup();
 
             return Err(MessageConsumerError::SentinelError(abortable));
         }

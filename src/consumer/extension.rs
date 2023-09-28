@@ -52,8 +52,8 @@ impl Error for ExtensionExtractError {}
 impl<B: MessageBus, T: Clone + Send + Sync + 'static> TryExtract<B> for Extension<T> {
     type Error = ExtensionExtractError;
 
-    fn try_extract(message: &ProcessContext<'_, B>) -> Result<Self, Self::Error> {
-        let extension = message
+    fn try_extract(ctx: &ProcessContext<'_, B>) -> Result<Self, Self::Error> {
+        let extension = ctx
             .extensions()
             .get::<T>()
             .ok_or_else(|| ExtensionExtractError(std::any::type_name::<T>()))?;

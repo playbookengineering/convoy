@@ -27,8 +27,6 @@ mod otel_test {
         schema::{Headers, Model, ModelContainer},
     };
 
-    const QUEUE_SIZE: usize = 128;
-
     const TRACEPARENT: &str = "traceparent";
     const BAGGAGE_HEADER: &str = "baggage";
     const BAGGAGE_KEY: &str = "meaning-of-life";
@@ -93,7 +91,7 @@ mod otel_test {
         let consumer2 = MessageConsumer::new(bus2)
             .extension(producer2)
             .message_handler(trace_consumer)
-            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE));
+            .listen(WorkerPoolConfig::fixed(3));
 
         let (producer3, out) = in_memory::make_queue();
         let producer3 = MessageProducer::builder(producer3.clone(), Json).build();
@@ -102,7 +100,7 @@ mod otel_test {
         let consumer3 = MessageConsumer::new(bus3)
             .extension(producer3)
             .message_handler(trace_consumer)
-            .listen(WorkerPoolConfig::fixed(3, QUEUE_SIZE));
+            .listen(WorkerPoolConfig::fixed(3));
 
         let entry = entry.into_sender();
         let mut out = out.into_receiver();
