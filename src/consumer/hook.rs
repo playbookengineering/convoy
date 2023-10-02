@@ -27,6 +27,10 @@ impl<B: MessageBus> Hooks<B> {
     }
 }
 
+/// Hook is called at following phases:
+///
+/// - before processing
+/// - after processing
 pub trait Hook<B: MessageBus>: Send + Sync + 'static {
     fn before_processing(&self, _ctx: &mut ProcessContext<'_, B>) {}
 

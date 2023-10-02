@@ -24,7 +24,10 @@ impl Model {
 
         let payload = serde_json::to_vec(&self).unwrap();
         let mut headers = RawHeaders::default();
-        headers.insert(CONTENT_TYPE_HEADER.to_owned(), "json".to_owned());
+        headers.insert(
+            CONTENT_TYPE_HEADER.to_owned(),
+            "application/json".to_owned(),
+        );
         headers.insert(KIND_HEADER.to_owned(), ModelContainer::KIND.to_owned());
 
         InMemoryMessage {

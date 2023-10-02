@@ -18,6 +18,8 @@ use super::{
     Hooks, IncomingMessage, MessageBus,
 };
 
+const DEFAULT_QUEUE_SIZE: usize = 128;
+
 pub struct WorkerPool<B: MessageBus> {
     pool: Flavour<B>,
 }
@@ -49,10 +51,10 @@ impl WorkerPoolConfig {
         Self::Fixed(FixedPoolConfig::new(count))
     }
 
-    pub fn key_routed(inactivity_duration: Duration, queue_size: usize) -> Self {
+    pub fn key_routed(inactivity_duration: Duration) -> Self {
         Self::KeyRouted(KeyRoutedPoolConfig {
             inactivity_duration,
-            queue_size,
+            queue_size: DEFAULT_QUEUE_SIZE,
         })
     }
 
@@ -78,12 +80,10 @@ pub struct FixedPoolConfig {
 }
 
 impl FixedPoolConfig {
-    const DEFAULT_QUEUE_SIZE: usize = 128;
-
     pub fn new(workers_count: usize) -> Self {
         Self {
             count: workers_count,
-            queue_size: Self::DEFAULT_QUEUE_SIZE,
+            queue_size: DEFAULT_QUEUE_SIZE,
         }
     }
 

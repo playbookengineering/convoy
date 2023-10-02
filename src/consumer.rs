@@ -57,6 +57,25 @@ pub enum MessageConsumerError {
     MessageBusEOF,
 }
 
+/// [`MessageConsumer`] handles messages from [`MessageBus`] similarly to how http servers handle requests.
+/// It allows for registering handlers for `Message` as in http servers where we register handlers for given path.
+/// Message kind is simple string which identifies given message type.
+/// Based on that kind, message is routed to proper handler.
+///
+/// [`MessageConsumer`] also allows for registering extensions which are shared across all handlers.
+/// Such extensions might be for example a database connection, channels etc.
+///
+/// # Example
+///
+/// ```ignore
+/// async fn hello_message(msg: MyMessage) {
+///     tracing::info!("Hello, {msg:?}");
+/// }
+///
+/// let consumer = MessageConsumer::new(bus)
+///     .message_handler(hello_example)
+///     .listen(WorkerPoolConfig::fixed(10)).await?;
+/// ```
 pub struct MessageConsumer<B: MessageBus> {
     router: Router<B>,
     extensions: Extensions,
@@ -65,6 +84,7 @@ pub struct MessageConsumer<B: MessageBus> {
 }
 
 impl<B: MessageBus> MessageConsumer<B> {
+    /// Returns new [`MessageConsumer`]
     pub fn new(bus: B) -> Self {
         Self {
             router: Router::default(),
@@ -74,6 +94,66 @@ impl<B: MessageBus> MessageConsumer<B> {
         }
     }
 
+    /// Registers message handler
+    ///
+    /// # Handler requiremenets:
+    ///
+    /// - must take message as the first parameter (type which implements [`Message`] trait)
+    /// - following parameters must implement [`TryExtract`] trait
+    /// - must return a `Send` future
+    /// - future output must be convertible to [`Confirmation`]
+    ///
+    /// We can form handlers as an `async` function or a closure:
+    ///
+    /// ```ignore
+    /// |_msg: MyMessage| async move { Confirmation::Ack }
+    /// ```
+    ///
+    /// ```ignore
+    /// async fn my_message_handler(_message: MyMessage) {
+    ///     Confirmation::Ack
+    /// }
+    /// ```
+    ///
+    /// # Example handlers:
+    ///
+    /// * infallible
+    ///
+    /// ```ignore
+    /// async fn my_message_handler(message: MyMessage) {
+    ///     let _ = message; // do something with message
+    ///
+    ///     // `()` is converted to `Confirmation::Ack`
+    /// }
+    /// ```
+    ///
+    /// * fallible
+    ///
+    /// ```ignore
+    /// pub enum MyError {
+    ///   Database(DbError),
+    /// }
+    ///
+    /// (impl Error boilerplate...)
+    ///
+    /// impl From<MyError> for Confirmation {
+    ///     fn from(_: MyError) -> Confirmation {
+    ///         // dependency failed, don't dequeue message
+    ///         Confirmation::Nack
+    ///     }
+    /// }
+    ///
+    /// async fn my_message_handler(
+    ///   message: MyMessage,
+    ///   Extension(db): Extension<SomeDatabase>)
+    /// -> Result<(), MyError> {
+    ///     let db_conn = state.db.acquire().await.map_err(MyError::Database)?;
+    ///
+    ///     let _ = message; // do something with message
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn message_handler<Fun, Args>(self, handler: Fun) -> Self
     where
         Fun: RoutableHandler<B, Args>
@@ -87,6 +167,19 @@ impl<B: MessageBus> MessageConsumer<B> {
         }
     }
 
+    /// Replaces fallback handler
+    ///
+    /// Fallback handler is called when message can't be routed. This can occurr if:
+    ///
+    /// - `x-convoy-kind` header is missing
+    /// - handler of given kind is not registered
+    ///
+    /// # Fallback handler requirements:
+    ///
+    /// - must take [`RawMessage`] as the first parameter
+    /// - following parameters must implement [`TryExtract`] trait
+    /// - must return a `Send` future
+    /// - future output must be convertible to [`Confirmation`]
     pub fn fallback_handler<Fun, Args>(self, handler: Fun) -> Self
     where
         Fun:
@@ -99,6 +192,35 @@ impl<B: MessageBus> MessageConsumer<B> {
         }
     }
 
+    /// Installs extensions
+    ///
+    /// These are used to share state across handlers and can be extracted
+    /// by using [`Extension`] extractor.
+    ///
+    /// # Extension requirements:
+    ///
+    /// Extension must be `Clone + Send + Sync + 'static`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // define extension
+    /// #[derive(Clone)]
+    /// struct State {
+    ///     database: MyDatabase
+    /// }
+    ///
+    /// // define handler with extension access
+    /// async fn my_message_handler(_msg: MyMessage, Extension(_state): Extension<State>) {
+    ///
+    /// }
+    ///
+    /// // install extension and handler
+    /// let consumer = MessageConsumer::new(bus)
+    ///     .extension(MyExtension)
+    ///     .message_handler(my_message_handler)
+    ///     .listen(WorkerPoolConfig::fixed(10)).await
+    /// ```
     pub fn extension<T>(self, extension: T) -> Self
     where
         T: Clone + Send + Sync + 'static,
@@ -109,6 +231,45 @@ impl<B: MessageBus> MessageConsumer<B> {
         }
     }
 
+    /// Installs hook
+    ///
+    /// These are called before and after message processing
+    ///
+    /// # Hook requirements
+    ///
+    /// Must implement [`Hook`] trait
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use chrono::Utc;
+    ///
+    /// // define hook
+    /// struct Timings;
+    ///
+    /// struct RecordedTime(i64);
+    ///
+    /// impl<B: MessageBus> Hook for Timings {
+    ///     fn before_processing(&self, ctx: &ProcessContext<'_, B>) {
+    ///         let now = Utc::now().timestamp_millis();
+    ///
+    ///         ctx.cache_mut.set(RecordedTime(now));
+    ///     }
+    ///
+    ///     fn after_processing(&self, ctx: &ProcessContext<'_, B>, _: Confirmation) {
+    ///         let now = Utc::now().timestamp_millis();
+    ///         let start: Option<RecordedTime> = ctx.cache.get();
+    ///
+    ///         if let Some(start) = start {
+    ///             tracing::info!("Took: {} ms", now - start.0);
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// // install hook
+    /// let consumer = MessageConsumer::new(bus)
+    ///     .hook(Timings)
+    /// ```
     pub fn hook<T>(self, hook: T) -> Self
     where
         T: Hook<B>,
@@ -119,6 +280,31 @@ impl<B: MessageBus> MessageConsumer<B> {
         }
     }
 
+    /// Finalize consumer configuration and start listening
+    ///
+    /// As a final step you need to choose between two concurrency strategies:
+    ///
+    /// - fixed worker pool - create pool of N workers:
+    ///
+    /// ```ignore
+    /// MessageConsumer::new(bus)
+    ///     .listen(WorkerPoolConfig::fixed(10))
+    ///     .await
+    /// ```
+    ///
+    /// - key-routed - workers are created per _message key_. Cleanup of inactive workers
+    ///   will occurr after each tick of `inactivity_duration`:
+    ///
+    /// ```ignore
+    /// MessageConsumer::new(bus)
+    ///     .listen(WorkerPoolConfig::key_routed(Duration::from_secs(5 * 60)))
+    ///     .await
+    /// ```
+    ///
+    /// *NOTE*: key-routed strategy allows for creating stateful handlers
+    /// with use of [`TaskLocal`] extractor. However, this library function is not
+    /// stable yet and the API is a subject to change.
+    /// For this reason fixed strategy is recommended at the moment
     pub async fn listen(
         mut self,
         config: WorkerPoolConfig,
