@@ -34,20 +34,20 @@ async fn message_is_passed_through_pipeline() {
     let producer1 = MessageProducer::builder(producer1, Json).build();
 
     // [ bus1 -> producer2 ]
-    let consumer1 = MessageConsumer::new(bus1)
+    let consumer1 = MessageConsumer::new()
         .extension(producer1)
         .message_handler(proxy::<InMemoryProducer, Json>)
-        .listen(WorkerPoolConfig::fixed(3));
+        .listen(bus1, WorkerPoolConfig::fixed(3));
 
     let (producer2, out) = in_memory::make_queue();
 
     let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
     // [ bus2 -> producer3 ]
-    let consumer2 = MessageConsumer::new(bus2)
+    let consumer2 = MessageConsumer::new()
         .extension(producer2)
         .message_handler(proxy::<InMemoryProducer, Json>)
-        .listen(WorkerPoolConfig::fixed(3));
+        .listen(bus2, WorkerPoolConfig::fixed(3));
 
     let entry = entry.into_sender();
     let mut out = out.into_receiver();
