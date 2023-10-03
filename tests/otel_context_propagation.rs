@@ -81,19 +81,19 @@ async fn otel_context_propagation() {
     let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
     // [ bus2 -> producer2 ]
-    let consumer2 = MessageConsumer::new(bus2)
+    let consumer2 = MessageConsumer::new()
         .extension(producer2)
         .message_handler(trace_consumer)
-        .listen(WorkerPoolConfig::fixed(3));
+        .listen(bus2, WorkerPoolConfig::fixed(3));
 
     let (producer3, out) = in_memory::make_queue();
     let producer3 = MessageProducer::builder(producer3.clone(), Json).build();
 
     // [ bus3 -> producer3 ]
-    let consumer3 = MessageConsumer::new(bus3)
+    let consumer3 = MessageConsumer::new()
         .extension(producer3)
         .message_handler(trace_consumer)
-        .listen(WorkerPoolConfig::fixed(3));
+        .listen(bus3, WorkerPoolConfig::fixed(3));
 
     let entry = entry.into_sender();
     let mut out = out.into_receiver();

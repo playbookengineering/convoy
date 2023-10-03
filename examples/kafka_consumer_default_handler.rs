@@ -50,9 +50,9 @@ async fn main() {
     // wrap consumer
     let consumer = KafkaConsumer::new(consumer);
 
-    MessageConsumer::new(consumer)
+    MessageConsumer::new()
         .fallback_handler(default_kafka_handler)
-        .listen(WorkerPoolConfig::fixed(10))
+        .listen(consumer, WorkerPoolConfig::fixed(10))
         .await
         .expect("unexpected consumer finish");
 }

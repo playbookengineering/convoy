@@ -3,6 +3,7 @@ use std::{
     error::Error,
     fmt::Display,
     future::Future,
+    marker::PhantomData,
     mem,
     pin::Pin,
     task::{Context, Poll},
@@ -72,25 +73,31 @@ pub enum MessageConsumerError {
 ///     tracing::info!("Hello, {msg:?}");
 /// }
 ///
-/// let consumer = MessageConsumer::new(bus)
+/// let consumer = MessageConsumer::new()
 ///     .message_handler(hello_example)
-///     .listen(WorkerPoolConfig::fixed(10)).await?;
+///     .listen(bus, WorkerPoolConfig::fixed(10)).await?;
 /// ```
 pub struct MessageConsumer<B: MessageBus> {
     router: Router<B>,
     extensions: Extensions,
     hooks: Hooks<B>,
-    bus: B,
+    bus: PhantomData<B>,
+}
+
+impl<B: MessageBus> Default for MessageConsumer<B> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<B: MessageBus> MessageConsumer<B> {
     /// Returns new [`MessageConsumer`]
-    pub fn new(bus: B) -> Self {
+    pub fn new() -> Self {
         Self {
             router: Router::default(),
             extensions: Extensions::default(),
             hooks: Hooks::default(),
-            bus,
+            bus: PhantomData,
         }
     }
 
@@ -216,10 +223,10 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// }
     ///
     /// // install extension and handler
-    /// let consumer = MessageConsumer::new(bus)
+    /// let consumer = MessageConsumer::new()
     ///     .extension(MyExtension)
     ///     .message_handler(my_message_handler)
-    ///     .listen(WorkerPoolConfig::fixed(10)).await
+    ///     .listen(bus, WorkerPoolConfig::fixed(10)).await
     /// ```
     pub fn extension<T>(self, extension: T) -> Self
     where
@@ -267,7 +274,7 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// }
     ///
     /// // install hook
-    /// let consumer = MessageConsumer::new(bus)
+    /// let consumer = MessageConsumer::new()
     ///     .hook(Timings)
     /// ```
     pub fn hook<T>(self, hook: T) -> Self
@@ -287,7 +294,7 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// - fixed worker pool - create pool of N workers:
     ///
     /// ```ignore
-    /// MessageConsumer::new(bus)
+    /// MessageConsumer::new()
     ///     .listen(WorkerPoolConfig::fixed(10))
     ///     .await
     /// ```
@@ -296,7 +303,7 @@ impl<B: MessageBus> MessageConsumer<B> {
     ///   will occurr after each tick of `inactivity_duration`:
     ///
     /// ```ignore
-    /// MessageConsumer::new(bus)
+    /// MessageConsumer::new()
     ///     .listen(WorkerPoolConfig::key_routed(Duration::from_secs(5 * 60)))
     ///     .await
     /// ```
@@ -307,6 +314,7 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// For this reason fixed strategy is recommended at the moment
     pub async fn listen(
         mut self,
+        bus: B,
         config: WorkerPoolConfig,
     ) -> Result<Infallible, MessageConsumerError> {
         let sentinels = mem::take(&mut self.router.sentinels);
@@ -327,7 +335,7 @@ impl<B: MessageBus> MessageConsumer<B> {
             router,
             extensions,
             hooks,
-            bus,
+            bus: _,
         } = self;
 
         let ctx = WorkerContext::new(router, extensions, hooks);
@@ -432,15 +440,18 @@ mod test {
         ) {
         }
 
-        let consumer = MessageConsumer::new(TestMessageBus)
+        let consumer = MessageConsumer::<TestMessageBus>::new()
             .message_handler(message_handler_missing_states)
             .fallback_handler(fallback_handler_missing_states);
 
         let _error = consumer
-            .listen(WorkerPoolConfig::Fixed(FixedPoolConfig {
-                count: 10,
-                queue_size: 128,
-            }))
+            .listen(
+                TestMessageBus,
+                WorkerPoolConfig::Fixed(FixedPoolConfig {
+                    count: 10,
+                    queue_size: 128,
+                }),
+            )
             .await
             .unwrap_err();
     }
