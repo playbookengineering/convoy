@@ -341,25 +341,26 @@ impl<B: MessageBus> MessageConsumer<B> {
         let ctx = WorkerContext::new(router, extensions, hooks);
 
         let cleanup_timer = config.timer();
-        let mut cleanup_tick_stream = TickStream(cleanup_timer);
         let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx);
-        let mut stream = bus
+        let stream = bus
             .into_stream()
             .await
             .map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
 
-        loop {
-            tokio::select! {
-                biased;
-                msg = stream.next() => {
-                    let msg = msg.ok_or(MessageConsumerError::MessageBusEOF)?.map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
-                    worker_pool.dispatch(msg).await;
+        let mut stream = TickStream(stream, cleanup_timer);
+
+        while let Some(e) = stream.next().await {
+            match e {
+                TickStreamItem::StreamItem(message) => {
+                    let message =
+                        message.map_err(|err| MessageConsumerError::MessageBusError(err.into()))?;
+                    worker_pool.dispatch(message).await;
                 }
-                Some(tick) = cleanup_tick_stream.next() => {
-                    worker_pool.do_cleanup(tick);
-                }
+                TickStreamItem::Tick(t) => worker_pool.do_cleanup(t),
             }
         }
+
+        Err(MessageConsumerError::MessageBusEOF)
     }
 }
 
@@ -397,21 +398,33 @@ impl Display for Confirmation {
     }
 }
 
-struct TickStream(Option<Interval>);
+struct TickStream<S: Stream + Unpin>(S, Option<Interval>);
 
-impl Stream for TickStream {
-    type Item = Instant;
+impl<S: Stream + Unpin> Stream for TickStream<S> {
+    type Item = TickStreamItem<S>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Some(interval) = &mut self.0 {
-            return match interval.poll_tick(cx) {
-                Poll::Ready(i) => Poll::Ready(Some(i.into_std())),
-                Poll::Pending => Poll::Pending,
-            };
-        }
+        if let ready @ Poll::Ready(_) = self
+            .0
+            .poll_next(cx)
+            .map(|item| item.map(TickStreamItem::StreamItem))
+        {
+            return ready;
+        };
 
-        Poll::Ready(None)
+        if let Some(interval) = &mut self.1 {
+            interval
+                .poll_tick(cx)
+                .map(|tick| Some(TickStreamItem::Tick(tick.into_std())))
+        } else {
+            Poll::Pending
+        }
     }
+}
+
+enum TickStreamItem<S: Stream> {
+    StreamItem(S::Item),
+    Tick(Instant),
 }
 
 #[cfg(test)]
