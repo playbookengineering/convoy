@@ -377,11 +377,16 @@ impl From<()> for Confirmation {
     }
 }
 
-impl<T: Into<Confirmation>, E: Into<Confirmation>> From<Result<T, E>> for Confirmation {
+impl<T: Into<Confirmation>, E: Into<Confirmation> + std::error::Error> From<Result<T, E>>
+    for Confirmation
+{
     fn from(result: Result<T, E>) -> Self {
         match result {
             Ok(ok) => ok.into(),
-            Err(err) => err.into(),
+            Err(err) => {
+                tracing::error!("message processing error: {err}");
+                err.into()
+            }
         }
     }
 }

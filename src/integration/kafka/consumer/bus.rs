@@ -269,7 +269,7 @@ struct Offset {
 
 impl PartialOrd for Offset {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.offset.partial_cmp(&other.offset)
+        Some(self.cmp(other))
     }
 }
 

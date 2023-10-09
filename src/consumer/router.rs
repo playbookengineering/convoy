@@ -70,6 +70,8 @@ impl<Bus: MessageBus> Router<Bus> {
 
 #[cfg(test)]
 mod test {
+    use std::fmt::Display;
+
     use crate::{
         consumer::extension::Extension,
         test::{TestMessage, TestMessageBus},
@@ -78,6 +80,7 @@ mod test {
     use super::*;
 
     struct A;
+    #[derive(Debug)]
     struct B;
 
     impl From<A> for Confirmation {
@@ -91,6 +94,14 @@ mod test {
             Confirmation::Reject
         }
     }
+
+    impl Display for B {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("B")
+        }
+    }
+
+    impl std::error::Error for B {}
 
     #[test]
     fn accept_handler() {
