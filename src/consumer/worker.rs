@@ -200,6 +200,11 @@ impl<B: MessageBus> Fixed<B> {
     }
 
     async fn dispatch(&mut self, msg: B::IncomingMessage) {
+        if let Some(hint) = msg.worker_hint() {
+            let worker_idx = hint % self.workers.len();
+            return self.workers[worker_idx].dispatch(msg).await;
+        }
+
         let worker_idx = match msg.key() {
             Some(key) => {
                 tracing::debug!("message key: {key:?}");

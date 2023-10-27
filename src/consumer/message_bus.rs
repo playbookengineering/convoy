@@ -35,4 +35,8 @@ pub trait IncomingMessage: Send + Sync + 'static {
 
     /// Reject message and dequeue
     async fn reject(&self) -> Result<(), Self::Error>;
+
+    fn worker_hint(&self) -> Option<usize> {
+        None
+    }
 }
