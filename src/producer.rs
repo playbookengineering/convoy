@@ -7,7 +7,7 @@ use tracing::Instrument;
 
 use crate::{
     codec::Codec,
-    message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
+    message::{Message, RawHeaders, KIND_HEADER},
 };
 
 use self::hook::Hooks;
@@ -82,12 +82,12 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         let payload = this
             .codec
             .encode(body)
+            .await
             .map_err(|err| ProducerError::EncodeError(err.into()))?;
 
         let mut headers: RawHeaders = headers.into();
 
         headers.insert(KIND_HEADER.to_owned(), M::KIND.to_owned());
-        headers.insert(CONTENT_TYPE_HEADER.to_owned(), C::CONTENT_TYPE.to_owned());
 
         let span = this.producer.make_span(&key, &headers, &payload, &options);
 
@@ -260,11 +260,6 @@ mod test {
         assert_eq!(
             received.headers.get(KIND_HEADER).unwrap(),
             TestMessage::KIND
-        );
-
-        assert_eq!(
-            received.headers.get(CONTENT_TYPE_HEADER).unwrap(),
-            Json::CONTENT_TYPE
         );
 
         let body: TestMessageBody = serde_json::from_slice(&received.payload).unwrap();

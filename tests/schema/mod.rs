@@ -1,4 +1,6 @@
-use convoy::message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER};
+use std::sync::Arc;
+
+use convoy::message::{Message, RawHeaders, RawMessage, KIND_HEADER};
 use fake::faker::name::en::Name;
 use fake::Dummy;
 use serde::{Deserialize, Serialize};
@@ -23,18 +25,14 @@ impl Model {
         let key = self.id.to_string();
 
         let payload = serde_json::to_vec(&self).unwrap();
-        let mut headers = RawHeaders::default();
-        headers.insert(
-            CONTENT_TYPE_HEADER.to_owned(),
-            "application/json".to_owned(),
-        );
+        let mut headers: std::collections::HashMap<String, String> = RawHeaders::default();
         headers.insert(KIND_HEADER.to_owned(), ModelContainer::KIND.to_owned());
 
-        InMemoryMessage {
-            key: Some(key),
+        InMemoryMessage(Arc::new(RawMessage {
+            key: Some(key.into_bytes()),
             payload,
             headers,
-        }
+        }))
     }
 }
 

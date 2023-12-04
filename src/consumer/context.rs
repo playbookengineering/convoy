@@ -1,26 +1,24 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
+    sync::Arc,
 };
 
 use crate::{
     codec::Codec,
-    message::{
-        Message, RawHeaders, RawMessage, TryFromRawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER,
-    },
+    message::{RawHeaders, RawMessage, KIND_HEADER},
 };
 
 use super::{Extensions, MessageBus};
+use crate::consumer::message_bus::IncomingMessage;
 
 use thiserror::Error;
 
-pub struct ProcessContext<'a, B: MessageBus> {
-    payload: &'a [u8],
-    key: Option<&'a [u8]>,
-    headers: RawHeaders,
+pub struct ProcessContext<'a, B: MessageBus, C: Codec> {
+    message: Arc<B::IncomingMessage>,
     extensions: &'a Extensions,
     cache: &'a mut LocalCache,
-    raw_msg: &'a B::IncomingMessage,
+    codec: &'a C,
 }
 
 #[derive(Debug, Error)]
@@ -32,81 +30,54 @@ pub enum MessageConvertError {
     Headers(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl<'a, B: MessageBus> ProcessContext<'a, B> {
+impl<'a, B: MessageBus, C: Codec> ProcessContext<'a, B, C> {
     pub fn new(
-        payload: &'a [u8],
-        key: Option<&'a [u8]>,
-        headers: RawHeaders,
+        message: Arc<B::IncomingMessage>,
         extensions: &'a Extensions,
         cache: &'a mut LocalCache,
-        raw_msg: &'a B::IncomingMessage,
+        codec: &'a C,
     ) -> Self {
         Self {
-            payload,
-            key,
-            headers,
+            message,
             extensions,
             cache,
-            raw_msg,
+            codec,
         }
     }
 
     pub fn kind(&self) -> Option<&str> {
-        self.headers.get(KIND_HEADER).map(|hdr| hdr.as_str())
-    }
-
-    pub fn content_type(&self) -> Option<&str> {
-        self.headers
-            .get(CONTENT_TYPE_HEADER)
+        self.message
+            .headers()
+            .get(KIND_HEADER)
             .map(|hdr| hdr.as_str())
     }
 
     pub fn headers(&self) -> &RawHeaders {
-        &self.headers
+        &self.message.headers()
     }
 
     pub fn payload(&self) -> &[u8] {
-        self.payload
+        self.message.payload()
     }
 
     pub fn key(&self) -> Option<&[u8]> {
-        self.key
+        self.message.key()
     }
 
-    pub fn raw_message(&self) -> &B::IncomingMessage {
-        self.raw_msg
+    pub fn codec(&self) -> &C {
+        self.codec
     }
 
     pub fn to_owned(&self) -> RawMessage {
         RawMessage {
-            payload: self.payload.to_vec(),
-            headers: self.headers.clone(),
-            key: self.key.map(|k| k.to_vec()),
+            payload: self.message.payload().to_vec(),
+            headers: self.message.headers().clone(),
+            key: self.message.key().map(|k| k.to_vec()),
         }
     }
 
-    pub(crate) fn extract_message<M, C>(&self, codec: C) -> Result<M, MessageConvertError>
-    where
-        M: Message,
-        C: Codec,
-    {
-        let Self {
-            payload,
-            headers,
-            key: _,
-            extensions: _,
-            cache: _,
-            raw_msg: _,
-        } = self;
-
-        let headers: M::Headers = TryFromRawHeaders::try_from_raw_headers(headers.clone())
-            .map_err(|err| MessageConvertError::Headers(Box::new(err)))?;
-
-        let body: M::Body = codec
-            .decode(payload)
-            .map_err(|err| MessageConvertError::Codec(Box::new(err)))?;
-
-        Ok(Message::from_body_and_headers(body, headers))
+    pub fn raw(&self) -> Arc<B::IncomingMessage> {
+        self.message.clone()
     }
 
     pub(crate) fn extensions(&self) -> &Extensions {

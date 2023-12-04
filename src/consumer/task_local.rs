@@ -6,6 +6,8 @@ use std::{
     marker::PhantomData,
 };
 
+use crate::codec::Codec;
+
 use super::{context::ProcessContext, MessageBus, TryExtract};
 
 tokio::task_local! {
@@ -54,10 +56,12 @@ impl<T: Default + Copy + Send + 'static> TaskLocal<T> {
     }
 }
 
-impl<B: MessageBus, T: Default + Send + Sync + Sized + 'static> TryExtract<B> for TaskLocal<T> {
+impl<B: MessageBus, C: Codec, T: Default + Send + Sync + Sized + 'static> TryExtract<B, C>
+    for TaskLocal<T>
+{
     type Error = Infallible;
 
-    fn try_extract(_: &ProcessContext<'_, B>) -> Result<Self, Self::Error> {
+    fn try_extract(_: &ProcessContext<'_, B, C>) -> Result<Self, Self::Error> {
         Ok(TaskLocal(PhantomData))
     }
 }

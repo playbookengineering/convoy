@@ -1,8 +1,10 @@
+use crate::codec::Codec;
+
 use super::{MessageBus, MessageConsumer};
 
 use std::fmt::Debug;
 
-pub trait Sentinel<B: MessageBus>: Debug + Send + Sync + 'static {
-    fn abort(&self, consumer: &MessageConsumer<B>) -> bool;
+pub trait Sentinel<B: MessageBus, C: Codec>: Debug + Send + Sync + 'static {
+    fn abort(&self, consumer: &MessageConsumer<B, C>) -> bool;
     fn cause(&self) -> String;
 }

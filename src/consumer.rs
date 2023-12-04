@@ -10,6 +10,8 @@ use std::{
     time::Instant,
 };
 
+use crate::codec::Codec;
+
 use self::{
     router::Router,
     worker::{WorkerContext, WorkerPool},
@@ -73,30 +75,47 @@ pub enum MessageConsumerError {
 ///     tracing::info!("Hello, {msg:?}");
 /// }
 ///
-/// let consumer = MessageConsumer::new()
+/// let consumer = MessageConsumer::new(Json)
 ///     .message_handler(hello_example)
 ///     .listen(bus, WorkerPoolConfig::fixed(10)).await?;
 /// ```
-pub struct MessageConsumer<B: MessageBus> {
-    router: Router<B>,
+pub struct MessageConsumer<B: MessageBus, C: Codec> {
+    router: Router<B, C>,
     extensions: Extensions,
-    hooks: Hooks<B>,
+    hooks: Hooks<B, C>,
     bus: PhantomData<B>,
+    codec: C,
 }
 
-impl<B: MessageBus> Default for MessageConsumer<B> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<B: MessageBus> MessageConsumer<B> {
-    /// Returns new [`MessageConsumer`]
-    pub fn new() -> Self {
+impl<B: MessageBus, C: Codec> MessageConsumer<B, C> {
+    /// Returns new [`MessageConsumer`] with selected serialization/deserialization method
+    ///
+    /// # Example (Json)
+    ///
+    /// ```ignore
+    /// let consumer = MessageConsumer::new(Json)
+    ///     .message_handler(|msg: MyMessage| {
+    ///         tracing::info!("Hello, {msg:?}");
+    ///     })
+    ///     .listen(bus, WorkerPoolConfig::fixed(10)).await?;
+    /// ```
+    ///
+    /// # Example (Avro)
+    ///
+    /// ```ignore
+    /// let registry = AvroRegistry::new("http://localhost:8081/");
+    /// let consumer = MessageConsumer::new(Avro::new(registry, "subject-name"))
+    ///     .message_handler(|msg: MyMessage| {
+    ///         tracing::info!("Hello, {msg:?}");
+    ///     })
+    ///     .listen(bus, WorkerPoolConfig::fixed(10)).await?;
+    /// ```
+    pub fn new(codec: C) -> Self {
         Self {
             router: Router::default(),
             extensions: Extensions::default(),
             hooks: Hooks::default(),
+            codec,
             bus: PhantomData,
         }
     }
@@ -163,8 +182,8 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// ```
     pub fn message_handler<Fun, Args>(self, handler: Fun) -> Self
     where
-        Fun: RoutableHandler<B, Args>
-            + Handler<B, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+        Fun: RoutableHandler<B, C, Args>
+            + Handler<B, C, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
             + 'static,
         Args: Send + Sync + 'static,
     {
@@ -189,8 +208,8 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// - future output must be convertible to [`Confirmation`]
     pub fn fallback_handler<Fun, Args>(self, handler: Fun) -> Self
     where
-        Fun:
-            Handler<B, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>> + 'static,
+        Fun: Handler<B, C, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+            + 'static,
         Args: Send + Sync + 'static,
     {
         Self {
@@ -279,7 +298,7 @@ impl<B: MessageBus> MessageConsumer<B> {
     /// ```
     pub fn hook<T>(self, hook: T) -> Self
     where
-        T: Hook<B>,
+        T: Hook<B, C>,
     {
         Self {
             hooks: self.hooks.push(hook),
@@ -336,12 +355,13 @@ impl<B: MessageBus> MessageConsumer<B> {
             extensions,
             hooks,
             bus: _,
+            codec,
         } = self;
 
-        let ctx = WorkerContext::new(router, extensions, hooks);
+        let ctx = WorkerContext::new(router, extensions, hooks, codec);
 
         let cleanup_timer = config.timer();
-        let mut worker_pool: WorkerPool<B> = WorkerPool::new(config, ctx);
+        let mut worker_pool: WorkerPool<B, _> = WorkerPool::new(config, ctx);
         let stream = bus
             .into_stream()
             .await
@@ -435,6 +455,7 @@ enum TickStreamItem<S: Stream> {
 #[cfg(test)]
 mod test {
     use crate::{
+        codec::Json,
         consumer::worker::FixedPoolConfig,
         message::RawMessage,
         test::{TestMessage, TestMessageBus},
@@ -458,7 +479,7 @@ mod test {
         ) {
         }
 
-        let consumer = MessageConsumer::<TestMessageBus>::new()
+        let consumer = MessageConsumer::<TestMessageBus, _>::new(Json)
             .message_handler(message_handler_missing_states)
             .fallback_handler(fallback_handler_missing_states);
 
