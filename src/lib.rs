@@ -17,9 +17,8 @@ pub(crate) mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::{
-        codec::{Codec, Json},
         consumer::{IncomingMessage, MessageBus},
-        message::{Message, RawHeaders, CONTENT_TYPE_HEADER, KIND_HEADER},
+        message::{Message, RawHeaders, KIND_HEADER},
     };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,10 +95,6 @@ pub(crate) mod test {
 
             let mut headers = RawHeaders::default();
             headers.insert(KIND_HEADER.to_owned(), TestMessage::KIND.to_owned());
-            headers.insert(
-                CONTENT_TYPE_HEADER.to_owned(),
-                Json::CONTENT_TYPE.to_owned(),
-            );
 
             let payload = serde_json::to_vec(&message.0).unwrap();
 
@@ -115,12 +110,12 @@ pub(crate) mod test {
     impl IncomingMessage for TestIncomingMessage {
         type Error = Infallible;
 
-        fn headers(&self) -> RawHeaders {
-            self.headers.clone()
-        }
-
         fn payload(&self) -> &[u8] {
             &self.payload
+        }
+
+        fn headers(&self) -> &RawHeaders {
+            &self.headers
         }
 
         fn key(&self) -> Option<&[u8]> {
@@ -138,6 +133,7 @@ pub(crate) mod test {
                 messaging.message.payload_size_bytes = self.payload.len(),
                 messaging.test.message.key = self
                     .key()
+                    .as_ref()
                     .and_then(|k| std::str::from_utf8(k).ok())
                     .unwrap_or_default(),
                 convoy.kind = tracing::field::Empty,

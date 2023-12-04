@@ -1,6 +1,6 @@
 use std::{collections::HashMap, future::Future, pin::Pin};
 
-use crate::message::RawMessage;
+use crate::{codec::Codec, message::RawMessage};
 
 use super::{
     context::ProcessContext,
@@ -9,13 +9,13 @@ use super::{
     Confirmation, MessageBus,
 };
 
-pub struct Router<B: MessageBus> {
-    handlers: HashMap<&'static str, BoxedHandler<B, ()>>,
-    fallback_handler: BoxedHandler<B, ()>,
-    pub(crate) sentinels: Vec<Box<dyn Sentinel<B>>>,
+pub struct Router<B: MessageBus, C: Codec> {
+    handlers: HashMap<&'static str, BoxedHandler<B, C, ()>>,
+    fallback_handler: BoxedHandler<B, C, ()>,
+    pub(crate) sentinels: Vec<Box<dyn Sentinel<B, C>>>,
 }
 
-impl<B: MessageBus> Default for Router<B> {
+impl<B: MessageBus, C: Codec + Clone> Default for Router<B, C> {
     fn default() -> Self {
         Self {
             handlers: Default::default(),
@@ -32,11 +32,11 @@ impl<B: MessageBus> Default for Router<B> {
     }
 }
 
-impl<Bus: MessageBus> Router<Bus> {
+impl<Bus: MessageBus, C: Codec> Router<Bus, C> {
     pub fn message_handler<Fun, Args>(mut self, handler: Fun) -> Self
     where
-        Fun: RoutableHandler<Bus, Args>
-            + Handler<Bus, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+        Fun: RoutableHandler<Bus, C, Args>
+            + Handler<Bus, C, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
             + 'static,
         Args: Send + Sync + 'static,
     {
@@ -49,7 +49,7 @@ impl<Bus: MessageBus> Router<Bus> {
 
     pub fn fallback_handler<Fun, Args>(mut self, handler: Fun) -> Self
     where
-        Fun: Handler<Bus, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
+        Fun: Handler<Bus, C, Args, Future = Pin<Box<dyn Future<Output = Confirmation> + Send>>>
             + 'static,
         Args: Send + Sync + 'static,
     {
@@ -58,7 +58,10 @@ impl<Bus: MessageBus> Router<Bus> {
         self
     }
 
-    pub async fn route(&self, ctx: &ProcessContext<'_, Bus>) -> Result<Confirmation, HandlerError> {
+    pub async fn route(
+        &self,
+        ctx: &ProcessContext<'_, Bus, C>,
+    ) -> Result<Confirmation, HandlerError> {
         let handler = ctx
             .kind()
             .and_then(|kind| self.handlers.get(kind))
@@ -73,6 +76,7 @@ mod test {
     use std::fmt::Display;
 
     use crate::{
+        codec::Json,
         consumer::extension::Extension,
         test::{TestMessage, TestMessageBus},
     };
@@ -109,7 +113,7 @@ mod test {
 
         async fn handler_with_ext(_msg: TestMessage, _: Extension<i32>) {}
 
-        let _ = Router::<TestMessageBus>::default()
+        let _ = Router::<TestMessageBus, Json>::default()
             .message_handler(handler)
             .message_handler(handler_with_ext)
             .message_handler(|message: TestMessage| async move {
@@ -138,7 +142,7 @@ mod test {
         async fn default_handler(_: RawMessage) {}
         async fn default_handler_with_ext(_: RawMessage, _: Extension<i32>) {}
 
-        let _ = Router::<TestMessageBus>::default()
+        let _ = Router::<TestMessageBus, Json>::default()
             .fallback_handler(default_handler)
             .fallback_handler(default_handler_with_ext)
             .fallback_handler(|message: RawMessage| async move {

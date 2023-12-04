@@ -82,6 +82,7 @@ where
 {
     consumer: ManuallyDrop<Arc<StreamConsumer<C>>>,
     message: ManuallyDrop<BorrowedMessage<'static>>,
+    headers: RawHeaders,
     commit_queue: Arc<Mutex<CommitQueue>>,
 }
 
@@ -110,9 +111,29 @@ impl<C: ConsumerContext> RdKafkaOwnedMessage<C> {
         // message lifetime
         let message = mem::transmute::<_, BorrowedMessage<'static>>(message);
 
+        // process headers
+        let headers = message
+            .headers()
+            .map(|headers| {
+                headers
+                    .iter()
+                    .filter_map(|header| {
+                        let value = header.value?;
+                        let value = std::str::from_utf8(value).ok()?;
+
+                        let key = header.key.to_string();
+                        let value = value.to_string();
+
+                        Some((key, value))
+                    })
+                    .collect::<RawHeaders>()
+            })
+            .unwrap_or_default();
+
         Self {
             consumer: ManuallyDrop::new(consumer),
             message: ManuallyDrop::new(message),
+            headers,
             commit_queue,
         }
     }
@@ -195,24 +216,8 @@ impl<C: ConsumerContext + 'static> MessageBus for KafkaConsumer<C> {
 impl<C: ConsumerContext + 'static> IncomingMessage for RdKafkaOwnedMessage<C> {
     type Error = KafkaError;
 
-    fn headers(&self) -> RawHeaders {
-        self.message()
-            .headers()
-            .map(|headers| {
-                headers
-                    .iter()
-                    .filter_map(|header| {
-                        let value = header.value?;
-                        let value = std::str::from_utf8(value).ok()?;
-
-                        let key = header.key.to_string();
-                        let value = value.to_string();
-
-                        Some((key, value))
-                    })
-                    .collect::<RawHeaders>()
-            })
-            .unwrap_or_default()
+    fn headers(&self) -> &RawHeaders {
+        &self.headers
     }
 
     fn payload(&self) -> &[u8] {

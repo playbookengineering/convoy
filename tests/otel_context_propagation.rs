@@ -7,6 +7,7 @@ mod schema;
 use crate::in_memory::{InMemoryMessageBus, PRODUCE_SPAN_NAME, RECEIVE_SPAN_NAME};
 use crate::schema::{Headers, Model, ModelContainer};
 
+use convoy::consumer::IncomingMessage;
 use convoy::{
     codec::Json,
     consumer::{Extension, MessageConsumer, WorkerPoolConfig},
@@ -35,7 +36,7 @@ async fn trace_creator(bus: InMemoryMessageBus, producer: Prod) {
     let mut receiver = bus.into_receiver();
 
     if let Some(message) = receiver.recv().await {
-        let body: Model = serde_json::from_slice(&message.payload).unwrap();
+        let body: Model = serde_json::from_slice(message.payload()).unwrap();
 
         let container = ModelContainer::from_body_and_headers(body, Headers);
 
@@ -81,7 +82,7 @@ async fn otel_context_propagation() {
     let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
     // [ bus2 -> producer2 ]
-    let consumer2 = MessageConsumer::new()
+    let consumer2 = MessageConsumer::new(Json)
         .extension(producer2)
         .message_handler(trace_consumer)
         .listen(bus2, WorkerPoolConfig::fixed(3));
@@ -90,7 +91,7 @@ async fn otel_context_propagation() {
     let producer3 = MessageProducer::builder(producer3.clone(), Json).build();
 
     // [ bus3 -> producer3 ]
-    let consumer3 = MessageConsumer::new()
+    let consumer3 = MessageConsumer::new(Json)
         .extension(producer3)
         .message_handler(trace_consumer)
         .listen(bus3, WorkerPoolConfig::fixed(3));
@@ -113,14 +114,14 @@ async fn otel_context_propagation() {
     let last = out.recv().await.unwrap();
 
     let baggage = last
-        .headers
+        .headers()
         .get(BAGGAGE_HEADER)
         .expect("baggage not exported");
 
     assert_eq!(*baggage, format!("{BAGGAGE_KEY}={BAGGAGE_VAL}"));
 
     let traceparent = last
-        .headers
+        .headers()
         .get(TRACEPARENT)
         .expect("traceparent not exported");
 

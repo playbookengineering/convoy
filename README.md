@@ -114,6 +114,20 @@ consuming a data stream of interest.
 of your choice; traits `MessageBus` and `IncomingMessage` have to be implemented
 and you're ready to go!
 
+# Examples
+
+To create test topic:
+
+kafka-topics --bootstrap-server localhost:32680 --topic test_topic --create --partitions 3 --replication-factor 1
+
+To create examples avro schema:
+
+```
+curl -X POST -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+  --data '{"schema":"{\"type\":\"record\",\"name\":\"TestTopic\",\"fields\":[{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"first_name\",\"type\":\"string\"},{\"name\":\"second_name\",\"type\":\"string\"}]}"}' \
+  http://dev-tools-tunnel.stg.2up-multi.tup-cloud.com:8081/subjects/test_topic-value/versions
+```
+
 # License
 
 This project is licensed under the MIT License

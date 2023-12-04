@@ -8,6 +8,7 @@ use rdkafka::{
 };
 
 use convoy::{
+    codec::Json,
     consumer::{MessageConsumer, WorkerPoolConfig},
     integration::kafka::{
         extractor::{Offset, Partition, Topic},
@@ -50,7 +51,7 @@ async fn main() {
     // wrap consumer
     let consumer = KafkaConsumer::new(consumer);
 
-    MessageConsumer::new()
+    MessageConsumer::new(Json)
         .fallback_handler(default_kafka_handler)
         .listen(consumer, WorkerPoolConfig::fixed(10))
         .await

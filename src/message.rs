@@ -4,7 +4,6 @@ use serde::{de::DeserializeOwned, Serialize};
 
 pub type RawHeaders = HashMap<String, String>;
 
-pub const CONTENT_TYPE_HEADER: &str = "x-convoy-content-type";
 pub const KIND_HEADER: &str = "x-convoy-kind";
 
 pub trait Message: Send + Sync + 'static {
@@ -14,7 +13,7 @@ pub trait Message: Send + Sync + 'static {
     const KIND: &'static str;
 
     /// Message body
-    type Body: Serialize + DeserializeOwned;
+    type Body: Serialize + DeserializeOwned + Send + Sync;
 
     /// Additional message metadata
     type Headers: TryFromRawHeaders + Into<RawHeaders> + Send + Sync;

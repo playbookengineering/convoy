@@ -1,13 +1,14 @@
 use std::{
     convert::Infallible,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use async_trait::async_trait;
 use convoy::{
     consumer::{IncomingMessage, MessageBus},
-    message::RawHeaders,
+    message::{RawHeaders, RawMessage},
     producer::Producer,
 };
 use futures_lite::Stream;
@@ -57,26 +58,22 @@ impl MessageBus for InMemoryMessageBus {
     }
 }
 
-pub struct InMemoryMessage {
-    pub key: Option<String>,
-    pub payload: Vec<u8>,
-    pub headers: RawHeaders,
-}
+pub struct InMemoryMessage(pub Arc<RawMessage>);
 
 #[async_trait]
 impl IncomingMessage for InMemoryMessage {
     type Error = Infallible;
 
-    fn headers(&self) -> RawHeaders {
-        self.headers.clone()
+    fn headers(&self) -> &RawHeaders {
+        &self.0.headers
     }
 
     fn payload(&self) -> &[u8] {
-        &self.payload
+        &self.0.payload
     }
 
     fn key(&self) -> Option<&[u8]> {
-        self.key.as_ref().map(|k| k.as_bytes())
+        self.0.key.as_ref().map(|k| &k[..])
     }
 
     fn make_span(&self) -> tracing::Span {
@@ -118,11 +115,11 @@ impl Producer for InMemoryProducer {
         payload: Vec<u8>,
         _: Self::Options,
     ) -> Result<(), Self::Error> {
-        let message = InMemoryMessage {
-            key: Some(key),
+        let message = InMemoryMessage(Arc::new(RawMessage {
+            key: Some(key.into_bytes()),
             payload,
             headers,
-        };
+        }));
 
         self.0.send(message).await.unwrap();
 

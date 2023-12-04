@@ -11,7 +11,7 @@ use rdkafka::{
 };
 
 use convoy::{
-    codec::Json,
+    codec::{Avro, AvroRegistry},
     consumer::{MessageConsumer, WorkerPoolConfig},
     integration::kafka::{KafkaConsumer, KafkaProducer},
     producer::MessageProducer,
@@ -39,7 +39,7 @@ impl Metadata {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Entity {
-    pub id: u32,
+    pub id: i32,
     pub first_name: String,
     pub second_name: String,
 }
@@ -131,22 +131,29 @@ async fn main() {
     let brokers = std::env::var("BROKERS").unwrap_or_else(|_| "127.0.0.1:9092".to_owned());
     let group_id = std::env::var("GROUP_ID").unwrap_or_else(|_| "test_group_id".to_owned());
     let topic = std::env::var("TOPIC").unwrap_or_else(|_| "test_topic".to_owned());
+    let registry =
+        std::env::var("AVRO_REGISTRY").unwrap_or_else(|_| "http:/127.0.0.1:8081".to_owned());
 
-    tracing::info!("Brokers: {brokers}, group_id: {group_id}, topic: {topic:?}");
+    tracing::info!(
+        "Brokers: {brokers}, group_id: {group_id}, topic: {topic:?}, registry: {registry:?}"
+    );
 
     let consumer = setup_consumer(&brokers, &group_id, &topic);
     let producer = setup_producer(&brokers);
 
     // wrap producer
+    let registry = AvroRegistry::new(registry.clone());
+    let avro = Avro::new(registry, "test_topic");
+
     let producer = KafkaProducer::new(producer, topic);
-    let producer = MessageProducer::builder(producer, Json).build();
+    let producer = MessageProducer::builder(producer, avro.clone()).build();
 
     tokio::spawn(producer_loop(producer));
 
     // wrap consumer
     let consumer = KafkaConsumer::new(consumer);
 
-    MessageConsumer::new(Json)
+    MessageConsumer::new(avro)
         .message_handler(my_message_handler)
         .listen(consumer, WorkerPoolConfig::fixed(10))
         .await
@@ -183,7 +190,7 @@ async fn my_message_handler(message: MyMessage) {
     tracing::info!("Received message: {message:?}");
 }
 
-async fn producer_loop(producer: MessageProducer<KafkaProducer, Json>) {
+async fn producer_loop(producer: MessageProducer<KafkaProducer, Avro<AvroRegistry>>) {
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
 

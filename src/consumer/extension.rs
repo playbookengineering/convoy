@@ -7,6 +7,8 @@ use std::{
     ops::Deref,
 };
 
+use crate::codec::Codec;
+
 use super::{extract::TryExtract, sentinel::Sentinel, MessageBus, MessageConsumer};
 
 use super::context::ProcessContext;
@@ -49,10 +51,10 @@ impl Display for ExtensionExtractError {
 
 impl Error for ExtensionExtractError {}
 
-impl<B: MessageBus, T: Clone + Send + Sync + 'static> TryExtract<B> for Extension<T> {
+impl<B: MessageBus, C: Codec, T: Clone + Send + Sync + 'static> TryExtract<B, C> for Extension<T> {
     type Error = ExtensionExtractError;
 
-    fn try_extract(ctx: &ProcessContext<'_, B>) -> Result<Self, Self::Error> {
+    fn try_extract(ctx: &ProcessContext<'_, B, C>) -> Result<Self, Self::Error> {
         let extension = ctx
             .extensions()
             .get::<T>()
@@ -61,7 +63,7 @@ impl<B: MessageBus, T: Clone + Send + Sync + 'static> TryExtract<B> for Extensio
         Ok(Self(extension.clone()))
     }
 
-    fn sentinel() -> Option<Box<dyn Sentinel<B>>> {
+    fn sentinel() -> Option<Box<dyn Sentinel<B, C>>> {
         Some(Box::new(MissingExtension::<T>(PhantomData)))
     }
 }
@@ -74,8 +76,8 @@ impl<T> Debug for MissingExtension<T> {
     }
 }
 
-impl<B: MessageBus, T: Send + Sync + 'static> Sentinel<B> for MissingExtension<T> {
-    fn abort(&self, consumer: &MessageConsumer<B>) -> bool {
+impl<B: MessageBus, C: Codec, T: Send + Sync + 'static> Sentinel<B, C> for MissingExtension<T> {
+    fn abort(&self, consumer: &MessageConsumer<B, C>) -> bool {
         consumer.extensions.get::<T>().is_none()
     }
 

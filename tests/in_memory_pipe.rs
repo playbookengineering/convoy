@@ -1,7 +1,7 @@
 use convoy::{
     codec::{Codec, Json},
     consumer::{Confirmation, Extension, MessageConsumer, WorkerPoolConfig},
-    message::{Message, CONTENT_TYPE_HEADER, KIND_HEADER},
+    message::{Message, KIND_HEADER},
     producer::{MessageProducer, Producer},
 };
 use fake::{Fake, Faker};
@@ -34,7 +34,7 @@ async fn message_is_passed_through_pipeline() {
     let producer1 = MessageProducer::builder(producer1, Json).build();
 
     // [ bus1 -> producer2 ]
-    let consumer1 = MessageConsumer::new()
+    let consumer1 = MessageConsumer::new(Json)
         .extension(producer1)
         .message_handler(proxy::<InMemoryProducer, Json>)
         .listen(bus1, WorkerPoolConfig::fixed(3));
@@ -44,7 +44,7 @@ async fn message_is_passed_through_pipeline() {
     let producer2 = MessageProducer::builder(producer2.clone(), Json).build();
 
     // [ bus2 -> producer3 ]
-    let consumer2 = MessageConsumer::new()
+    let consumer2 = MessageConsumer::new(Json)
         .extension(producer2)
         .message_handler(proxy::<InMemoryProducer, Json>)
         .listen(bus2, WorkerPoolConfig::fixed(3));
@@ -62,15 +62,11 @@ async fn message_is_passed_through_pipeline() {
     entry.send(raw_msg).await.unwrap();
     let recv = out.recv().await.unwrap();
 
-    let model_out: Model = serde_json::from_slice(&recv.payload).unwrap();
+    let model_out: Model = serde_json::from_slice(&recv.0.payload).unwrap();
 
     assert_eq!(model_in, model_out);
     assert_eq!(
-        recv.headers.get(KIND_HEADER).map(|x| x.as_str()),
+        recv.0.headers.get(KIND_HEADER).map(|x| x.as_str()),
         Some(ModelContainer::KIND)
-    );
-    assert_eq!(
-        recv.headers.get(CONTENT_TYPE_HEADER).map(|x| x.as_str()),
-        Some(Json::CONTENT_TYPE)
     );
 }

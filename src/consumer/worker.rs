@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{instrument, Instrument, Span};
 
-use crate::consumer::Confirmation;
+use crate::{codec::Codec, consumer::Confirmation};
 
 use super::{
     context::{LocalCache, ProcessContext},
@@ -20,22 +20,24 @@ use super::{
 
 const DEFAULT_QUEUE_SIZE: usize = 128;
 
-pub struct WorkerPool<B: MessageBus> {
-    pool: Flavour<B>,
+pub struct WorkerPool<B: MessageBus, C: Codec> {
+    pool: Flavour<B, C>,
 }
 
-pub struct WorkerContext<B: MessageBus> {
+pub struct WorkerContext<B: MessageBus, C: Codec> {
     extensions: Arc<Extensions>,
-    router: Arc<Router<B>>,
-    hooks: Arc<Hooks<B>>,
+    router: Arc<Router<B, C>>,
+    hooks: Arc<Hooks<B, C>>,
+    codec: Arc<C>,
 }
 
-impl<B: MessageBus> Clone for WorkerContext<B> {
+impl<B: MessageBus, C: Codec> Clone for WorkerContext<B, C> {
     fn clone(&self) -> Self {
         Self {
             extensions: Arc::clone(&self.extensions),
             router: Arc::clone(&self.router),
             hooks: Arc::clone(&self.hooks),
+            codec: Arc::clone(&self.codec),
         }
     }
 }
@@ -101,9 +103,9 @@ pub struct KeyRoutedPoolConfig {
     pub queue_size: usize,
 }
 
-enum Flavour<B: MessageBus> {
+enum Flavour<B: MessageBus, C: Codec> {
     Fixed(Fixed<B>),
-    KeyRouted(KeyRouted<B>),
+    KeyRouted(KeyRouted<B, C>),
 }
 
 struct Fixed<B: MessageBus> {
@@ -111,16 +113,17 @@ struct Fixed<B: MessageBus> {
     hasher: ahash::RandomState,
 }
 
-impl<B: MessageBus> WorkerContext<B> {
-    pub fn new(router: Router<B>, extensions: Extensions, hooks: Hooks<B>) -> Self {
+impl<B: MessageBus, C: Codec> WorkerContext<B, C> {
+    pub fn new(router: Router<B, C>, extensions: Extensions, hooks: Hooks<B, C>, codec: C) -> Self {
         Self {
             extensions: Arc::new(extensions),
             router: Arc::new(router),
             hooks: Arc::new(hooks),
+            codec: Arc::new(codec),
         }
     }
 
-    pub fn router(&self) -> &Router<B> {
+    pub fn router(&self) -> &Router<B, C> {
         &self.router
     }
 
@@ -128,13 +131,13 @@ impl<B: MessageBus> WorkerContext<B> {
         &self.extensions
     }
 
-    pub fn hooks(&self) -> &Hooks<B> {
+    pub fn hooks(&self) -> &Hooks<B, C> {
         &self.hooks
     }
 }
 
-impl<B: MessageBus> WorkerPool<B> {
-    pub fn new(config: WorkerPoolConfig, context: WorkerContext<B>) -> Self {
+impl<B: MessageBus, C: Codec> WorkerPool<B, C> {
+    pub fn new(config: WorkerPoolConfig, context: WorkerContext<B, C>) -> Self {
         let worker = match config.clone() {
             WorkerPoolConfig::Fixed(cfg) => Self::fixed(cfg, context),
             WorkerPoolConfig::KeyRouted(cfg) => Self::key_routed(cfg, context),
@@ -145,13 +148,15 @@ impl<B: MessageBus> WorkerPool<B> {
         worker
     }
 
-    fn fixed(config: FixedPoolConfig, context: WorkerContext<B>) -> Self {
+    fn fixed(config: FixedPoolConfig, context: WorkerContext<B, C>) -> Self {
         let FixedPoolConfig { count, queue_size } = config;
 
         assert!(count > 0, "Count must be greater than zero!");
 
         let workers = (0..count)
-            .map(|idx| launch_worker::<B>(context.clone(), WorkerId(idx.to_string()), queue_size))
+            .map(|idx| {
+                launch_worker::<B, C>(context.clone(), WorkerId(idx.to_string()), queue_size)
+            })
             .collect();
 
         Self {
@@ -159,7 +164,7 @@ impl<B: MessageBus> WorkerPool<B> {
         }
     }
 
-    fn key_routed(cfg: KeyRoutedPoolConfig, context: WorkerContext<B>) -> Self {
+    fn key_routed(cfg: KeyRoutedPoolConfig, context: WorkerContext<B, C>) -> Self {
         Self {
             pool: Flavour::KeyRouted(KeyRouted::new(cfg, context)),
         }
@@ -216,15 +221,15 @@ impl<B: MessageBus> Fixed<B> {
     }
 }
 
-pub struct KeyRouted<B: MessageBus> {
+pub struct KeyRouted<B: MessageBus, C: Codec> {
     workers: HashMap<WorkerId, WorkerState<B>>,
     fallback: WorkerState<B>,
-    context: WorkerContext<B>,
+    context: WorkerContext<B, C>,
     cfg: KeyRoutedPoolConfig,
 }
 
-impl<B: MessageBus> KeyRouted<B> {
-    fn new(cfg: KeyRoutedPoolConfig, context: WorkerContext<B>) -> Self {
+impl<B: MessageBus, C: Codec> KeyRouted<B, C> {
+    fn new(cfg: KeyRoutedPoolConfig, context: WorkerContext<B, C>) -> Self {
         let fallback = launch_worker(
             context.clone(),
             WorkerId("fallback".to_owned()),
@@ -319,14 +324,14 @@ impl<B: MessageBus> Debug for WorkerEvent<B> {
     }
 }
 
-fn launch_worker<B: MessageBus>(
-    context: WorkerContext<B>,
+fn launch_worker<B: MessageBus, C: Codec>(
+    context: WorkerContext<B, C>,
     id: WorkerId,
     queue_size: usize,
 ) -> WorkerState<B> {
     let (tx, rx) = mpsc::channel(queue_size);
 
-    tokio::spawn(TASK_LOCALS.scope(Default::default(), worker::<B>(context, rx, id)));
+    tokio::spawn(TASK_LOCALS.scope(Default::default(), worker::<B, C>(context, rx, id)));
 
     WorkerState {
         sender: tx,
@@ -335,8 +340,8 @@ fn launch_worker<B: MessageBus>(
 }
 
 #[instrument(skip_all, fields(id = id.0))]
-async fn worker<B: MessageBus>(
-    worker_context: WorkerContext<B>,
+async fn worker<B: MessageBus, C: Codec>(
+    worker_context: WorkerContext<B, C>,
     mut receiver: Receiver<WorkerEvent<B>>,
     id: WorkerId,
 ) {
@@ -347,28 +352,28 @@ async fn worker<B: MessageBus>(
     while let Some(event) = receiver.recv().await {
         tracing::debug!("Received event: {event:?}");
 
-        let message = match event {
+        let message = Arc::new(match event {
             WorkerEvent::IncomingMessage(m) => m,
             WorkerEvent::Termination => return,
-        };
+        });
 
         let extensions = worker_context.extensions();
         let router = worker_context.router();
-
-        let payload = message.payload();
-        let headers = message.headers();
-        let key = message.key();
 
         let span = message.make_span();
         let mut cache = LocalCache::default();
 
         if cfg!(feature = "opentelemetry") {
-            extract_otel_context(&span, &headers);
+            extract_otel_context(&span, message.headers());
         }
 
         async {
-            let mut process_context =
-                ProcessContext::new(payload, key, headers, extensions, &mut cache, &message);
+            let mut process_context = ProcessContext::new(
+                message.clone(),
+                extensions,
+                &mut cache,
+                &*worker_context.codec,
+            );
 
             if let Some(kind) = process_context.kind() {
                 Span::current().record("convoy.kind", kind);
@@ -441,6 +446,7 @@ impl WorkerId {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::codec::Json;
     use crate::consumer::Extension;
     use crate::consumer::{Confirmation, Hook};
     use crate::message::{RawHeaders, RawMessage};
@@ -503,12 +509,12 @@ mod test {
     async fn fixed_pool_dispatch() {
         let (tx, mut rx) = unbounded_channel::<(TestMessage, WorkerId, usize)>();
 
-        let router = Router::default().message_handler(handler);
+        let router = Router::<TestMessageBus, _>::default().message_handler(handler);
         let extensions = Extensions::default().insert(tx);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
 
-        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config_default(), context);
+        let mut workers = WorkerPool::fixed(fixed_config_default(), context);
         workers.set_stable_seed();
 
         let message = TestMessage::new(0);
@@ -544,12 +550,12 @@ mod test {
     async fn fixed_pool_fallback() {
         let (tx, mut rx) = unbounded_channel::<(RawMessage, WorkerId)>();
 
-        let router = Router::default().fallback_handler(fallback_handler);
+        let router = Router::<TestMessageBus, _>::default().fallback_handler(fallback_handler);
         let extensions = Extensions::default().insert(tx);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
 
-        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config_default(), context);
+        let mut workers = WorkerPool::<TestMessageBus, _>::fixed(fixed_config_default(), context);
 
         let incoming = TestIncomingMessage {
             key: None,
@@ -569,12 +575,12 @@ mod test {
         let (tx, mut _rx) = unbounded_channel::<(TestMessage, WorkerId, usize)>();
 
         let extensions = Extensions::default().insert(tx);
-        let router = Router::default().message_handler(handler);
+        let router = Router::<_, Json>::default().message_handler(handler);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
         let dur = Duration::from_millis(5);
         let count = 10;
-        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config(10), context);
+        let mut workers = WorkerPool::<TestMessageBus, Json>::fixed(fixed_config(10), context);
 
         let message = TestMessage::new(0);
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
@@ -597,9 +603,9 @@ mod test {
         let extensions = Extensions::default().insert(tx);
         let router = Router::default().message_handler(handler);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
 
-        let mut workers = WorkerPool::<TestMessageBus>::key_routed(kr_config_default(), context);
+        let mut workers = WorkerPool::<TestMessageBus, _>::key_routed(kr_config_default(), context);
 
         for i in 0..100 {
             let message = TestMessage::new(0);
@@ -641,9 +647,9 @@ mod test {
         let extensions = Extensions::default().insert(tx);
         let router = Router::default().message_handler(handler);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
         let dur = Duration::from_millis(5);
-        let mut workers = WorkerPool::<TestMessageBus>::key_routed(kr_config(dur), context);
+        let mut workers = WorkerPool::<TestMessageBus, _>::key_routed(kr_config(dur), context);
 
         let message = TestMessage::new(0);
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
@@ -668,9 +674,9 @@ mod test {
         let extensions = Extensions::default().insert(tx);
         let router = Router::default().message_handler(handler);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
         let dur = Duration::from_millis(5);
-        let mut workers = WorkerPool::<TestMessageBus>::key_routed(kr_config(dur), context);
+        let mut workers = WorkerPool::<TestMessageBus, _>::key_routed(kr_config(dur), context);
 
         let message = TestMessage::new(0);
         let incoming = TestIncomingMessage::create_raw_json(message.clone());
@@ -702,9 +708,9 @@ mod test {
         let extensions = Extensions::default().insert(tx);
         let router = Router::default().fallback_handler(fallback_handler);
 
-        let context = WorkerContext::new(router, extensions, Default::default());
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
 
-        let mut workers = WorkerPool::<TestMessageBus>::key_routed(kr_config_default(), context);
+        let mut workers = WorkerPool::<TestMessageBus, _>::key_routed(kr_config_default(), context);
 
         let incoming = TestIncomingMessage {
             key: None,
@@ -730,12 +736,12 @@ mod test {
 
         struct TestHook(UnboundedSender<Event>);
 
-        impl<B: MessageBus> Hook<B> for TestHook {
-            fn before_processing(&self, _: &mut ProcessContext<'_, B>) {
+        impl<B: MessageBus, C: Codec> Hook<B, C> for TestHook {
+            fn before_processing(&self, _: &mut ProcessContext<'_, B, C>) {
                 self.0.send(Event::ProcessStart).unwrap();
             }
 
-            fn after_processing(&self, _: &ProcessContext<'_, B>, confirmation: Confirmation) {
+            fn after_processing(&self, _: &ProcessContext<'_, B, C>, confirmation: Confirmation) {
                 self.0.send(Event::ProcessEnd(confirmation)).unwrap();
             }
         }
@@ -744,9 +750,10 @@ mod test {
 
         let hooks = Hooks::default().push(TestHook(tx));
 
-        let context = WorkerContext::new(Router::default(), Extensions::default(), hooks);
+        let context = WorkerContext::new(Router::default(), Extensions::default(), hooks, Json);
 
-        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config_default(), context);
+        let mut workers =
+            WorkerPool::<TestMessageBus, Json>::fixed(fixed_config_default(), context);
 
         let incoming = TestIncomingMessage {
             key: None,
@@ -770,12 +777,12 @@ mod test {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         struct Num(i32);
 
-        impl<B: MessageBus> Hook<B> for TestHook {
-            fn before_processing(&self, req: &mut ProcessContext<'_, B>) {
+        impl<B: MessageBus, C: Codec> Hook<B, C> for TestHook {
+            fn before_processing(&self, req: &mut ProcessContext<'_, B, C>) {
                 req.cache_mut().set(Num(42));
             }
 
-            fn after_processing(&self, req: &ProcessContext<'_, B>, _: Confirmation) {
+            fn after_processing(&self, req: &ProcessContext<'_, B, C>, _: Confirmation) {
                 let num: Option<Num> = req.cache().get().cloned();
                 self.0.send(num).unwrap();
             }
@@ -784,8 +791,8 @@ mod test {
         let (tx, mut rx) = unbounded_channel();
         let hooks = Hooks::default().push(TestHook(tx));
 
-        let context = WorkerContext::new(Router::default(), Extensions::default(), hooks);
-        let mut workers = WorkerPool::<TestMessageBus>::fixed(fixed_config_default(), context);
+        let context = WorkerContext::new(Router::default(), Extensions::default(), hooks, Json);
+        let mut workers = WorkerPool::<TestMessageBus, _>::fixed(fixed_config_default(), context);
 
         let incoming = TestIncomingMessage {
             key: None,
