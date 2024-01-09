@@ -3,8 +3,6 @@ name = "convoy"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [features]
 default = ["kafka"]
 kafka = ["dep:rdkafka"]
@@ -42,3 +40,18 @@ fake = { version = "2", features = ["derive"] }
 opentelemetry = { version = "0.19", features = ["rt-tokio", "trace"] }
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }
 httpmock = "0.6"
+
+[[example]]
+name = "kafka_consumer_default_handler"
+path = "examples/kafka_consumer_default_handler.rs"
+required-features = ["kafka"]
+
+[[example]]
+name = "kafka_produce_consume"
+path = "examples/kafka_produce_consume.rs"
+required-features = ["kafka"]
+
+[[example]]
+name = "kafka_produce_consume_avro"
+path = "examples/kafka_produce_consume_avro.rs"
+required-features = ["kafka", "avro"]
