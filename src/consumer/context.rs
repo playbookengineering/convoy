@@ -53,7 +53,7 @@ impl<'a, B: MessageBus, C: Codec> ProcessContext<'a, B, C> {
     }
 
     pub fn headers(&self) -> &RawHeaders {
-        &self.message.headers()
+        self.message.headers()
     }
 
     pub fn payload(&self) -> &[u8] {

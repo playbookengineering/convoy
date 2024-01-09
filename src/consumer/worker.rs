@@ -1,7 +1,9 @@
+use futures_lite::FutureExt;
 use rand::{thread_rng, Rng};
 use std::{
     collections::HashMap,
     fmt::Debug,
+    panic::AssertUnwindSafe,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -385,10 +387,17 @@ async fn worker<B: MessageBus, C: Codec>(
                 .hooks()
                 .before_processing(&mut process_context);
 
-            let confirmation = match router.route(&process_context).await {
-                Ok(confirmation) => confirmation,
-                Err(err) => {
+            let confirmation = match AssertUnwindSafe(router.route(&process_context))
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(confirmation)) => confirmation,
+                Ok(Err(err)) => {
                     tracing::error!("Handler error occurred: {err}");
+                    Confirmation::Reject
+                }
+                Err(err) => {
+                    tracing::error!("Handler panicked with error: {err:?}");
                     Confirmation::Reject
                 }
             };
@@ -414,7 +423,7 @@ async fn worker<B: MessageBus, C: Codec>(
             );
         }
         .instrument(span)
-        .await
+        .await;
     }
 }
 
@@ -466,6 +475,23 @@ mod test {
         sender.send((message, worker_id, counter)).unwrap();
 
         call_counter.set(counter + 1);
+    }
+
+    async fn panicking_handler(
+        message: TestMessage,
+        sender: Extension<UnboundedSender<(TestMessage, WorkerId, usize)>>,
+        worker_id: TaskLocal<WorkerId>,
+        mut call_counter: TaskLocal<usize>,
+    ) {
+        let worker_id = worker_id.with(|x| x.clone());
+        let counter = call_counter.get();
+        call_counter.set(counter + 1);
+
+        if counter == 0 {
+            panic!("Handler panicked");
+        } else {
+            sender.send((message, worker_id, counter)).unwrap();
+        }
     }
 
     async fn fallback_handler(
@@ -544,6 +570,28 @@ mod test {
 
         assert_eq!(message, processed);
         assert_eq!(worker_id.get(), "2");
+    }
+
+    #[tokio::test]
+    async fn panicking_handlers_are_not_crashing_worker() {
+        let (tx, mut rx) = unbounded_channel::<(TestMessage, WorkerId, usize)>();
+
+        let router = Router::<TestMessageBus, _>::default().message_handler(panicking_handler);
+        let extensions = Extensions::default().insert(tx);
+
+        let context = WorkerContext::new(router, extensions, Default::default(), Json);
+
+        let mut workers = WorkerPool::fixed(fixed_config_default(), context);
+        workers.set_stable_seed();
+
+        let message = TestMessage::new(0);
+
+        let incoming = TestIncomingMessage::create_raw_json(message.clone());
+        workers.dispatch(incoming.clone()).await;
+        workers.dispatch(incoming).await;
+
+        let (_, _, count) = rx.recv().await.unwrap();
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]

@@ -89,7 +89,7 @@ async fn message_is_serialized_and_deserialized() {
     let expected_id = model.0.id.clone();
 
     producer1
-        .produce(model, Default::default())
+        .produce(model, ())
         .await
         .expect("cannot send message");
 
