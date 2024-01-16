@@ -30,7 +30,7 @@ where
 {
     consumer: ManuallyDrop<Arc<StreamConsumer<C>>>,
     stream: ManuallyDrop<MessageStream<'static>>,
-    commit_queue: Arc<Mutex<CommitQueue>>,
+    commit_queue: Arc<Option<Mutex<CommitQueue>>>,
 }
 
 impl<C: ConsumerContext> RdKafkaMessageStream<C> {
@@ -40,7 +40,7 @@ impl<C: ConsumerContext> RdKafkaMessageStream<C> {
     unsafe fn new<'a>(
         consumer: &'a Arc<StreamConsumer<C>>,
         stream: MessageStream<'a>,
-        commit_queue: Arc<Mutex<CommitQueue>>,
+        commit_queue: Arc<Option<Mutex<CommitQueue>>>,
     ) -> Self {
         let consumer = Arc::clone(consumer);
 
@@ -83,7 +83,7 @@ where
     consumer: ManuallyDrop<Arc<StreamConsumer<C>>>,
     message: ManuallyDrop<BorrowedMessage<'static>>,
     headers: RawHeaders,
-    commit_queue: Arc<Mutex<CommitQueue>>,
+    commit_queue: Arc<Option<Mutex<CommitQueue>>>,
 }
 
 impl<C: ConsumerContext> RdKafkaOwnedMessage<C> {
@@ -93,17 +93,18 @@ impl<C: ConsumerContext> RdKafkaOwnedMessage<C> {
     unsafe fn new<'a>(
         consumer: &'a Arc<StreamConsumer<C>>,
         message: BorrowedMessage<'a>,
-        commit_queue: Arc<Mutex<CommitQueue>>,
+        commit_queue: Arc<Option<Mutex<CommitQueue>>>,
     ) -> Self {
         let tp = TopicPartition {
             topic: message.topic().to_owned(),
             partition: message.partition(),
         };
 
-        commit_queue
-            .lock()
-            .expect("Mutex poisoned")
-            .push(tp, message.offset());
+        if let Some(cq) = commit_queue.as_ref() {
+            cq.lock()
+                .expect("Mutex poisoned")
+                .push(tp, message.offset());
+        }
 
         let consumer = Arc::clone(consumer);
 
@@ -143,23 +144,29 @@ impl<C: ConsumerContext> RdKafkaOwnedMessage<C> {
     }
 
     pub fn commit(&self) -> Result<(), rdkafka::error::KafkaError> {
-        let topic = self.message.topic();
-        let partition = self.message.partition();
-        let offset = self.message.offset();
+        if let Some(cq) = self.commit_queue.as_ref() {
+            let topic = self.message.topic();
+            let partition = self.message.partition();
+            let offset = self.message.offset();
 
-        let tp = TopicPartition {
-            topic: topic.to_owned(),
-            partition,
-        };
+            let tp = TopicPartition {
+                topic: topic.to_owned(),
+                partition,
+            };
 
-        // hold the lock until we sync with consumer
-        {
-            let mut cq = self.commit_queue.lock().expect("Poisoned mutex");
+            // hold the lock until we sync with consumer
+            {
+                let mut cq = cq.lock().expect("Poisoned mutex");
 
-            if let Some(offset) = cq.commit(tp, offset) {
-                let mut tpl = TopicPartitionList::with_capacity(1);
-                tpl.add_partition_offset(topic, partition, rdkafka::Offset::Offset(offset + 1))?;
-                self.consumer.commit(&tpl, CommitMode::Async)?;
+                if let Some(offset) = cq.commit(tp, offset) {
+                    let mut tpl = TopicPartitionList::with_capacity(1);
+                    tpl.add_partition_offset(
+                        topic,
+                        partition,
+                        rdkafka::Offset::Offset(offset + 1),
+                    )?;
+                    self.consumer.commit(&tpl, CommitMode::Async)?;
+                }
             }
         }
 
@@ -184,6 +191,7 @@ where
     C: ConsumerContext + 'static,
 {
     consumer: Arc<StreamConsumer<C>>,
+    commit: bool,
 }
 
 impl<C> KafkaConsumer<C>
@@ -193,7 +201,13 @@ where
     pub fn new(consumer: StreamConsumer<C>) -> Self {
         Self {
             consumer: Arc::new(consumer),
+            commit: true,
         }
+    }
+
+    pub fn with_commit(mut self, commit: bool) -> Self {
+        self.commit = commit;
+        self
     }
 }
 
@@ -205,7 +219,11 @@ impl<C: ConsumerContext + 'static> MessageBus for KafkaConsumer<C> {
 
     async fn into_stream(self) -> Result<Self::Stream, Self::Error> {
         let stream = self.consumer.stream();
-        let commit_queue = Default::default();
+        let commit_queue = Arc::new(
+            self.commit
+                .then(|| Some(Default::default()))
+                .unwrap_or_default(),
+        );
         let stream = unsafe { RdKafkaMessageStream::new(&self.consumer, stream, commit_queue) };
 
         Ok(stream)
