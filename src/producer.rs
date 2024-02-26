@@ -62,24 +62,10 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
         message: M,
         options: P::Options,
     ) -> Result<(), ProducerError> {
-        self.0.hooks.before_send();
-
-        let result = self.produce_impl(message, options).await;
-        self.0.hooks.after_send(&result);
-        result
-    }
-
-    async fn produce_impl<M: Message>(
-        &self,
-        message: M,
-        options: P::Options,
-    ) -> Result<(), ProducerError> {
-        let this = &self.0;
         let key = message.key();
-
         let (body, headers) = message.into_body_and_headers();
-
-        let payload = this
+        let payload = self
+            .0
             .codec
             .encode(body)
             .await
@@ -89,17 +75,36 @@ impl<P: Producer, C: Codec> MessageProducer<P, C> {
 
         headers.insert(KIND_HEADER.to_owned(), M::KIND.to_owned());
 
+        self.produce_raw(key, payload, headers, options).await
+    }
+
+    pub async fn produce_raw(
+        &self,
+        key: String,
+        payload: Vec<u8>,
+        mut headers: RawHeaders,
+        options: P::Options,
+    ) -> Result<(), ProducerError> {
+        let this = &self.0;
+
+        this.hooks.before_send();
+
         let span = this.producer.make_span(&key, &headers, &payload, &options);
 
         if cfg!(feature = "opentelemetry") {
             inject_otel_context(&span, &mut headers);
         }
 
-        this.producer
+        let result = this
+            .producer
             .send(key, headers, payload, options)
             .instrument(span)
             .await
-            .map_err(|err| ProducerError::SendError(err.into()))
+            .map_err(|err| ProducerError::SendError(err.into()));
+
+        this.hooks.after_send(&result);
+
+        result
     }
 }
 
