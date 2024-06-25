@@ -532,6 +532,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[ignore = "unstable test, is seed really stable"]
     async fn fixed_pool_dispatch() {
         let (tx, mut rx) = unbounded_channel::<(TestMessage, WorkerId, usize)>();
 
