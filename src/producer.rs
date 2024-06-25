@@ -155,6 +155,10 @@ pub trait Producer: Send + Sync + 'static {
     ) -> tracing::Span;
 }
 
+pub trait RoutableOptions {
+    fn route(self, target: Option<String>) -> Self;
+}
+
 #[cfg(test)]
 mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};

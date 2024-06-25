@@ -8,7 +8,10 @@ use rdkafka::{
     ClientContext,
 };
 
-use crate::{message::RawHeaders, producer::Producer};
+use crate::{
+    message::RawHeaders,
+    producer::{Producer, RoutableOptions},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct KafkaProducerOptions {
@@ -30,6 +33,14 @@ impl KafkaProducerOptions {
 
         self.additional_headers.insert(key, value);
 
+        self
+    }
+}
+
+impl RoutableOptions for KafkaProducerOptions {
+    /// In case of kafka route is a topic name
+    fn route(mut self, target: Option<String>) -> Self {
+        self.topic_override = target;
         self
     }
 }
